@@ -484,10 +484,60 @@ all along (fix the operation), or you are gold-plating a way to save money.
 ### 7 · Correctness — can the resource fence?
 
 **Yes — "only one node may write the consolidated report blob."** The protected
-resource *is* the blob, and Azure rejects a write without the current lease ID
-(`409`/`412`). The service enforces it, which is what fencing actually
-requires. Same shape as a version-checked `UPDATE`: the resource refuses the
-stale writer.
+resource *is* the blob, and Azure rejects a write without the current lease ID.
+The service enforces it, which is what fencing actually requires. Same shape as
+a version-checked `UPDATE`: the resource refuses the stale writer.
+
+#### What an Azure blob lease actually is
+
+Verified against the `Lease Blob` REST docs — worth knowing precisely, because
+it is the only mainstream service that does resource-side enforcement out of
+the box.
+
+*"A lease on a blob provides exclusive **write and delete** access to the
+blob."* Reads are unaffected: `Get Blob`, `Get Blob Properties` and
+`List Blobs` all succeed with no lease ID. It is a write lock, not a
+read-write lock.
+
+Operations that **do** require the lease ID while one is active — missing it
+fails `412`: `Put Blob`, `Put Block`, `Put Block List`, `Put Page`,
+`Append Block`, `Set Blob Metadata`, `Set Blob Properties`, `Delete Blob`,
+and `Copy Blob` (destination).
+
+The outcome table is the important part:
+
+| Lease state | Write with your ID | Write with wrong ID | Write with **no** ID |
+|---|---|---|---|
+| Leased (A) | succeeds | `409` | `412` |
+| Expired (A) | **`412`** | `412` | **succeeds** |
+
+**Row 2 is the fencing working where it matters** — the stale holder, writing
+with its now-expired lease ID, is rejected by the service. That is a zombie
+being refused by the resource, which is exactly step 7's requirement. But a
+process that never took a lease writes straight through. **A lease binds
+participants, not the blob.**
+
+#### Three gotchas
+
+- **You cannot lease a blob that does not exist**, so a lease is the wrong tool
+  for *"only one process may create this file"*. That's a conditional write —
+  `If-None-Match: *` — first writer wins, the rest get `412`. Step 1, not 7.
+- **Container deletion bypasses blob leases entirely.** Per the docs: *"a
+  container can be deleted even if blobs within it have active leases."* Use
+  `Lease Container` if that matters.
+- **Failover is not instant.** If a lease *expires* rather than being released,
+  a client may wait **up to one minute** before a new lease can be acquired.
+  Fine for leader election, surprising if you expected fast handover.
+
+#### The two real use cases
+
+1. **Protecting a mutable shared blob** — a manifest, checkpoint or state file
+   that several workers update. The genuine step 7 case: the lock *is* the
+   resource.
+2. **Leader election on a sentinel blob** — the dominant real-world use (Azure
+   Functions/WebJobs singletons, `DistributedLock.Azure`'s default, Event Hubs
+   partition ownership). Here the blob is only a token, so there is **no
+   fencing** — that is a step 6 answer.
 
 **No — "only one node may send a settlement to a partner API that is not
 idempotent and has no version check."** Correctness matters, the side effect is
