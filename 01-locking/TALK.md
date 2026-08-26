@@ -206,8 +206,25 @@ answer is lying. Sometimes the honest output is *change the design*.
 3. **If the side effect leaves your process, you need idempotency, not mutual
    exclusion.**
 
+**And one practical instruction:** if the tree lands you at a distributed
+lock, use [madelson/DistributedLock](https://github.com/madelson/DistributedLock)
+rather than hand-rolling. Ten providers behind one interface, and its
+`HandleLostToken` is the only off-the-shelf answer to *"what if the lock is
+lost mid-work?"* — the question §4's demo just showed you can't ignore.
+
+Its own docs make the argument for you, which is worth a slide:
+
+> *"Timeout-based locking approaches such as Redis locks and Azure leases have
+> an inherent risk that an extended hang on the machine holding the lock could
+> cause the timeout to expire before the lock can be automatically-renewed."*
+
+That's a mainstream .NET library saying what the talk just said. Its
+recommended "unified approach" — a Postgres or SQL Server lock protecting
+resources in that same database, over one connection and transaction — is
+step 5 of the tree, and it's why step 5 comes before step 6.
+
 **Point at the artifact.** `FRAMEWORK.md` is the bookmark: the map, the eight
-questions, the tree, the anti-patterns table.
+questions, the tree, Part 5's provider matrix, the anti-patterns table.
 
 **Close on the folklore table.** Eight things "everyone knows" about locking,
 none of which survived checking against primary sources — including a live

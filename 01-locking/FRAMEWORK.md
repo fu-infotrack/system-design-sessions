@@ -364,6 +364,89 @@ dotnet run 09-optimistic.cs   # lost update, the rows-affected gotcha, retry cos
 
 ---
 
+## Part 5 — Don't write it yourself
+
+If the tree lands you at step 5, 6 or 7, you need a distributed lock. Reach
+for [madelson/DistributedLock](https://github.com/madelson/DistributedLock)
+before hand-rolling one. Ten providers behind one interface, so switching
+backends is a package reference rather than a rewrite.
+
+```csharp
+await using (await myDistributedLock.AcquireAsync())
+{
+    // we hold the lock here
+}   // Dispose releases it
+```
+
+### The providers
+
+| Package | Mechanism | Lock | RW lock | Semaphore |
+|---|---|:-:|:-:|:-:|
+| `.SqlServer` | `sp_getapplock` | ✓ | ✓ | ✓ |
+| `.Postgres` | advisory locks | ✓ | ✓ | ✓ |
+| `.MySql` | MySQL / MariaDB | ✓ | ✓ | ✓ |
+| `.Oracle` | Oracle | ✓ | ✓ | ✓ |
+| `.Redis` | Redis | ✓ | | ✓ |
+| `.Azure` | blob leases | ✓ | | |
+| `.MongoDB` | MongoDB | ✓ | | |
+| `.ZooKeeper` | ZooKeeper | ✓ | | |
+| `.FileSystem` | lock files | ✓ | | |
+| `.WaitHandles` | OS global `WaitHandle`s — **Windows only** | ✓ | | |
+
+Two provider notes that matter given everything above:
+
+- **`.Postgres` supports transaction-scoped locking** via
+  `pg_advisory_xact_lock`, and its docs say this is "helpful with PgBouncer" —
+  the library has the same conclusion the demos reached the hard way.
+- **`.WaitHandles` is Windows only**, which follows from §1b: there is no
+  portable OS-level named-mutex story.
+
+### Three things to know before you adopt it
+
+**1. It is non-reentrant, deliberately.** v2.0.0: *"Changed all locking
+implementations to be non-reentrant."* `lock` is reentrant and this is not —
+a recursive call self-deadlocks. Same trap as `SemaphoreSlim`, and it bites
+people porting in-process code to distributed.
+
+**2. `HandleLostToken` is the answer to question 3.** The handle exposes a
+`CancellationToken` that fires if the lock is detected as lost:
+
+> *"Sometimes, your code's hold on a lock can be disrupted due to a disruption
+> in the underlying technology. For example, if you are holding a
+> Postgres-based lock and the underlying database connection is killed, your
+> code will no longer be holding the lock. Most such disruptions will result
+> in a failure when the lock handle is disposed, but some may not."*
+
+That is the closest thing to a practical answer for *"what happens if the
+lock is lost mid-work?"* — pass it into the work so long operations abort
+instead of continuing unprotected. With one caveat, quoted:
+
+> *"Accessing the HandleLostToken can force a handle to perform additional
+> background work under the hood (e.g. polling), so don't use this feature
+> unless you think you need it."*
+
+Detection is not free, and it is detection, not prevention.
+
+**3. Its own docs make this framework's argument.** Worth showing the room,
+because it's a mainstream .NET library saying it rather than a talk:
+
+> *"Timeout-based locking approaches such as Redis locks and Azure leases have
+> an inherent risk that an extended hang on the machine holding the lock could
+> cause the timeout to expire before the lock can be automatically-renewed (a
+> network outage could cause the same issue)."*
+
+The docs go on to recommend the **unified approach** — using a SQL Server or
+Postgres lock to protect resources *in that same database*, over a shared
+`DbConnection` and transaction. That's step 5 of the tree, and it's why step 5
+sits before step 6: when the lock and the protected resource are the same
+transaction, they commit or roll back together. That is the practical version
+of fencing, and it's available to almost everyone.
+
+For absolute guarantees the docs point at Kleppmann and concede true safety
+may be unachievable. Same conclusion as step 7.
+
+---
+
 ## Anti-patterns
 
 | Smell | Why | Instead |
