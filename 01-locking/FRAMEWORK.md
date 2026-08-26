@@ -368,6 +368,46 @@ Why this lands on 6 and not earlier:
 So: `SET NX PX` with a unique token and a compare-and-delete unlock, and accept
 that it will occasionally double-run.
 
+#### The recipe, spelled out
+
+**Acquire** — one atomic command:
+
+```
+SET lock:reindex <random-token> NX PX 30000
+```
+
+| | |
+|---|---|
+| `NX` | only if **N**ot e**X**ists — first caller wins, the rest get nil. This is the mutual exclusion |
+| `PX 30000` | expire after 30,000 ms. **Mandatory** — if the holder dies, nothing else will release it |
+| `<random-token>` | unique per acquisition. The part people skip, and it is load-bearing |
+
+**Release** — *not* `DEL`. Compare the value against your token, then delete,
+atomically on the server:
+
+```lua
+if redis.call("get", KEYS[1]) == ARGV[1]
+  then return redis.call("del", KEYS[1]) else return 0 end
+```
+
+Redis 8.4+ has this as a command: `DELEX lock:reindex IFEQ <token>`.
+
+**Why the token is load-bearing.** Plain `DEL` does not merely fail to protect
+you — it breaks the *next* holder:
+
+1. A acquires, TTL 30 s
+2. A stalls 35 s — a GC pause is enough
+3. The lock expires
+4. B acquires it, legitimately
+5. A wakes, finishes, calls `DEL` → **deletes B's lock**
+6. C acquires. B and C are now both running.
+
+With the compare-and-delete, A's release is a no-op because its token no longer
+matches. It must be server-side atomic — `GET` then `DEL` from the client has a
+race in the gap, where the lock can expire and be re-acquired.
+
+`06-redis-lock.cs --naive` runs the broken version live.
+
 **The test for this branch: write down what a double-run costs.** Money → you
 are here. Wrong data → you are not.
 
