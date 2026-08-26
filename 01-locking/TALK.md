@@ -211,6 +211,18 @@ evidence for exactly those rows.
 lock, which one?"* — and the framework's whole job is to make steps 1 to 3
 happen first.
 
+**Then make it concrete, fast.** Don't walk all thirteen worked examples —
+pick three from the table and let the room place them:
+
+| | Branch |
+|---|---|
+| "A user must not register the same email twice" | 1 — unique index |
+| "The browser retried the POST that charges a card" | 2 — idempotency key |
+| "Ten workers draining a jobs table" | 5 — `FOR UPDATE SKIP LOCKED` |
+
+Ask before you tell. The point isn't the answers, it's that the *questions*
+resolved them — and the full table in `FRAMEWORK.md` is the handout.
+
 Call out step 7's dead end explicitly: a framework that always produces an
 answer is lying. Sometimes the honest output is *change the design*.
 
@@ -245,7 +257,8 @@ resources in that same database, over one connection and transaction — is
 step 5 of the tree, and it's why step 5 comes before step 6.
 
 **Point at the artifact.** `FRAMEWORK.md` is the bookmark: the map, the eight
-questions, the tree, Part 5's provider matrix, the anti-patterns table.
+questions, the tree, **a worked example for every branch**, Part 5's provider
+matrix, the anti-patterns table.
 
 **Close on the folklore table.** Eight things "everyone knows" about locking,
 none of which survived checking against primary sources — including a live

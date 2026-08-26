@@ -252,6 +252,136 @@ is "change the design", not "use Redlock and hope."
 
 ---
 
+## Worked examples — one per branch
+
+The tree is abstract; these are not. Each scenario is chosen so exactly one
+branch fits. If you can place your problem next to one of these, you have your
+answer.
+
+| Scenario | Branch | Answer |
+|---|---|---|
+| A user must not register the same email twice | 1 | unique index + `ON CONFLICT` |
+| A room must not be double-booked | 1 | `EXCLUDE USING gist` |
+| Two admins edit the same customer form for 5 minutes | 1 | optimistic concurrency (version token) |
+| The browser retried the POST that charges a card | 2 | **idempotency key** — not a lock |
+| Apply a stream of per-order status updates across 10 workers | 3 | partition by order id |
+| Refresh an in-process cache read by request threads | 4a | `Interlocked.Exchange` of an immutable snapshot |
+| A console tool must not run twice on one machine | 4b | named `Mutex`, `Global`-prefixed |
+| Deduct from an account balance | 5 | `SELECT … FOR UPDATE` |
+| 10 workers draining a jobs table | 5 | `FOR UPDATE SKIP LOCKED` |
+| Per-tenant nightly import, no row to lock | 5 | `pg_advisory_xact_lock` |
+| Only one node should rebuild the search index | 6 (efficiency) | Redis `SET NX PX` + CAS unlock |
+| Only one node may write the consolidated report blob | 7 (yes) | Azure Blob lease — the service fences it |
+| Only one node may send a settlement to a non-idempotent partner API | 7 (**no**) | **Stop.** No lock fixes it — see below |
+
+### 1 · The store can enforce it
+
+**"A user must not register the same email twice."** Uniqueness is a predicate
+over rows, so the database can hold the invariant. Two concurrent signups
+race, one wins, the other gets `23505` and you turn that into *"that email is
+already registered"*. No lock, and it holds against a migration or a manual
+insert too.
+
+**"A room must not be double-booked."** Same branch, harder predicate —
+`EXCLUDE USING gist (room_id WITH =, during WITH &&)`. Most people solve this
+with a distributed lock around a check-then-insert. They don't need to.
+
+**"Two admins edit the same customer form for five minutes."** Also step 1, but
+the invariant is *don't silently clobber* rather than *don't duplicate* — so
+it's optimistic concurrency, not a constraint. Long think-time between read and
+write is exactly OCC's best case: contention is rare, and a lock held across
+five minutes of human thinking is indefensible.
+
+### 2 · The side effect is outside the store
+
+**"The browser retried the POST that charges a card."** A lock across three
+pods does not help, and this is the important intuition: **the lock and the
+charge cannot commit together.** Whatever order you choose, there's an instant
+where one happened and the other didn't. So you can't get exactly-once out of
+mutual exclusion — you get it by making the *operation* idempotent, with a key
+the payment provider deduplicates on.
+
+You might still take a lock here, to avoid burning two API calls. That's an
+efficiency lock, and it should say so in a comment.
+
+### 3 · Contention can be made impossible
+
+**"Apply a stream of per-order status updates across 10 workers."** Work is
+keyed by order id and arrives through a broker you configure, so partition on
+order id and every update for `order-123` lands on one consumer. Nothing to
+lock because nothing can interleave.
+
+Note the precondition doing the work: **you control the routing.** The same
+problem arriving as HTTP requests to any of three pods does not qualify — fall
+through to step 4.
+
+### 4 · One process, or one machine
+
+**"Refresh an in-process cache of exchange rates, read by request threads."**
+Single process, shared state, no external effect. Don't reach for a lock at
+all — build the new dictionary off to the side and
+`Interlocked.Exchange` the reference. Readers never block and never see a
+half-built state.
+
+**"A console tool must not run twice on one machine."** Multiple processes, one
+machine, no database in play. Named `Mutex` — and `Global`-prefixed, or it's
+scoped to the POSIX session on Unix and the Terminal Services session on
+Windows, and your guard silently does nothing.
+
+### 5 · The database is the shared state
+
+Three different answers depending on what you're locking:
+
+- **"Deduct from an account balance."** The row exists and the work is short →
+  `SELECT … FOR UPDATE`. The lock and the write are in one transaction, so
+  they commit or roll back together.
+- **"Ten workers draining a jobs table."** → `FOR UPDATE SKIP LOCKED`. Each
+  worker takes a *different* row rather than queueing behind the one in front.
+- **"Per-tenant nightly import."** There is no row to lock — the thing you're
+  serialising on is a *concept*. → `pg_advisory_xact_lock(hash)`, inside an
+  explicit transaction.
+
+This branch is where most distributed-lock questions should land, and usually
+the reason they don't is that nobody realised the database was already
+sufficient.
+
+### 6 · Efficiency, not correctness
+
+**"Only one node should rebuild the search index."** If two nodes do it you
+waste CPU and money, and the *result is identical* — nothing is corrupted. That
+is an efficiency lock, so the cheapest thing that mostly works is correct:
+Redis `SET NX PX` with a unique token and a compare-and-delete unlock. Accept
+that it will occasionally double-run.
+
+The test for this branch: **write down what a double-run costs.** If the answer
+is money, you're here. If it's wrong data, you're not.
+
+### 7 · Correctness — can the resource fence?
+
+**Yes — "only one node may write the consolidated report blob."** The protected
+resource *is* the blob, and Azure rejects a write without the current lease ID
+(`409`/`412`). The service enforces it, which is what fencing actually
+requires. Same shape as a version-checked `UPDATE`: the resource refuses the
+stale writer.
+
+**No — "only one node may send a settlement to a partner API that is not
+idempotent and has no version check."** Correctness matters, the side effect is
+external, and the resource cannot reject a stale caller. **There is no lock
+that makes this safe**, and a framework that offered you one would be lying.
+
+What to do instead — and this is the dead-end being productive:
+
+1. Ask the partner for an idempotency key. Most payment and messaging APIs have
+   one. That's step 2, and it solves it outright.
+2. If they won't, build the dedupe yourself: record the intent in your database
+   first, with a unique constraint on a business key, and only send if the
+   insert won. You've converted an unfenceable external effect into step 1 plus
+   step 2. It is not perfect — you can still send twice if you crash between
+   insert and send — but it turns silent duplication into a detectable,
+   reconcilable gap, which is what "safe" means in practice.
+
+---
+
 ## Step 1 in practice — what the store can enforce for you
 
 Worth its own section, because it's where most "I need a distributed lock"
