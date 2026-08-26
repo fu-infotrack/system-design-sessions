@@ -230,7 +230,9 @@ you back, it is sending you to one of these three:
                   Write "this lock is approximate" in a comment, and mean it.
     CORRECTNESS -> continue. The lock alone is not enough.
 
-7.  Can the protected resource reject a stale writer?
+7.  Can the protected RESOURCE reject a stale writer?
+    (not "is my lock good" -- "when my lease has expired and I write
+     anyway, does the resource refuse me?")
     YES -> fencing token, version check, or a lease the service enforces
            (Azure Blob lease on that blob). This is the only genuinely safe
            distributed answer.
@@ -271,7 +273,7 @@ answer.
 | 10 workers draining a jobs table | 5 | `FOR UPDATE SKIP LOCKED` |
 | Per-tenant nightly import, no row to lock | 5 | `pg_advisory_xact_lock` |
 | Only one node should rebuild the search index | 6 (efficiency) | Redis `SET NX PX` + CAS unlock — but see the alias-swap trap |
-| Only one node may write the consolidated report blob | 7 (yes) | Azure Blob lease — the service fences it |
+| Only one node may write the consolidated report blob | 7 (yes) | Azure Blob lease **on that blob** — the service fences the write |
 | Only one node may send a settlement to a non-idempotent partner API | 7 (**no**) | **Stop.** No lock fixes it — see below |
 
 ### 1 · The store can enforce it
@@ -438,6 +440,46 @@ optimisation*, so ask whether restructuring removes the cost instead. If you
 keep the lock, say so in a comment — and if you find yourself adding renewal,
 watchdogs and fencing to it, you have misdiagnosed. Either it was correctness
 all along (fix the operation), or you are gold-plating a way to save money.
+
+> ### Steps 6 and 7 are not about which lock you pick
+>
+> A natural objection: *Redis locks and Azure blob leases look like the same
+> thing — both TTL leases that can expire mid-work. Why do they land on
+> different branches?*
+>
+> They **are** the same kind of lock. Step 7 is not asking about your lock at
+> all. It asks a question about the **resource**:
+>
+> > When your lease has expired and you write anyway, does the resource
+> > stop you?
+>
+> - **Redis** — no. The lock lives in Redis; the thing you're protecting is
+>   somewhere else, and nothing connects them. Redis has no idea what you're
+>   guarding, so an expired lease does not prevent a single byte from being
+>   written.
+> - **Azure lease on the blob you are writing** — yes. The lock *is* on the
+>   resource. Storage rejects the write without the current lease ID (`409` /
+>   `412`). Your lease expiring makes your **write** fail.
+>
+> So the same technology lands on either branch, depending on what it guards:
+>
+> | Lock | Protects | Resource checks? | Branch |
+> |---|---|---|---|
+> | Redis `SET NX PX` | an index, an API, a database | **no** — nothing links them | 6 |
+> | Azure lease on blob X | **blob X** | yes — `409`/`412` | 7 |
+> | Azure lease on a *sentinel* blob | something else | **no** | **6** |
+> | PG advisory lock + write in one transaction | rows in that database | yes — same transaction | 5 |
+> | Version-checked `UPDATE` | that row | yes — rows-affected | 1 |
+>
+> **Row 3 is the trap**, and it's the default: `DistributedLock.Azure` leases a
+> sentinel blob it invents. You get mutual exclusion with none of the fencing —
+> a step 6 answer wearing step 7's clothing.
+>
+> **The unifying idea:** fencing requires the lock and the resource to be the
+> **same system**, or the resource to check a token you carry. That's also why
+> step 5 is strong — `SELECT … FOR UPDATE` and the write commit in one
+> transaction, so the lock and the resource cannot disagree. Step 6 is the
+> branch where they are different systems and you are hoping.
 
 ### 7 · Correctness — can the resource fence?
 
