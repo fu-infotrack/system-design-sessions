@@ -1,0 +1,29 @@
+
+/* --- quiz component (assets/quiz.js) --- */
+.quiz { margin: 1.8rem 0; }
+.quiz-prompt { font-style: italic; color: var(--ink-soft); }
+.quiz-item { border-top: 1px solid var(--rule); padding: 1.1rem 0 .4rem; }
+.quiz-text { margin: 0 0 .8rem; }
+.quiz-buttons { display: flex; gap: .6rem; flex-wrap: wrap; }
+.quiz-btn {
+  flex: 1 1 0; min-width: 9rem;
+  font: 600 .85rem/1 ui-sans-serif, system-ui, sans-serif;
+  padding: .65rem .5rem; cursor: pointer;
+  background: var(--paper); color: var(--ink);
+  border: 1px solid var(--rule); border-radius: 4px;
+}
+.quiz-btn:hover:not(:disabled) { border-color: var(--accent); }
+.quiz-btn:disabled { cursor: default; opacity: .55; }
+.quiz-btn.is-right  { border-color: var(--good); color: var(--good); opacity: 1; }
+.quiz-btn.is-wrong  { border-color: var(--bad);  color: var(--bad);  opacity: 1; }
+.quiz-btn.is-answer { border-color: var(--good); opacity: 1; }
+.quiz-feedback { display: none; font-size: .92rem; margin-top: .8rem; padding-left: .9rem; }
+.quiz-feedback.is-shown { display: block; }
+.quiz-feedback.was-right { border-left: 3px solid var(--good); }
+.quiz-feedback.was-wrong { border-left: 3px solid var(--bad); }
+.quiz-score {
+  margin-top: 1.4rem; padding-top: .9rem; border-top: 1px solid var(--rule);
+  font: 600 .8rem/1.4 ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: .05em; color: var(--ink-soft);
+}
+.quiz-score.is-complete { color: var(--ink); }
