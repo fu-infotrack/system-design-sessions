@@ -270,9 +270,19 @@ FOR UPDATE SKIP LOCKED
 LIMIT 1;
 ```
 
-N workers, no coordinator, no lock service, no duplicate delivery. This is
-the Competing Consumer session in one keyword — plant the flag here and
-tell them it's the follow-up.
+N workers, no coordinator, no lock service, no duplicate delivery.
+
+`05-pg-skip-locked.cs` measures it — 12 jobs, 4 workers:
+
+| | wall clock | duplicates |
+|---|---|---|
+| `FOR UPDATE SKIP LOCKED` | **412 ms** | 0 |
+| plain `FOR UPDATE` | 1506 ms | 0 |
+
+Both correct. The plain version is 3.6x slower purely because the workers
+queue behind each other instead of taking different rows. This is the
+Competing Consumer session in one keyword — plant the flag and tell them
+it's the follow-up.
 
 ### 3.3 Advisory locks — lock an arbitrary key, no row required
 
@@ -341,6 +351,30 @@ the opposite symptom, which is why it's so hard to diagnose from a ticket.
 **The config trap that hides it:** `server_reset_query` still *reads* as
 `DISCARD ALL` via `SHOW CONFIG` in transaction mode — it just never runs.
 Auditing the config tells you you're safe when you aren't.
+
+### 3.4a You do not need PgBouncer to have this bug ★
+
+Found while building the demos, and it's the version that will land hardest
+with a .NET room: **Npgsql's own client-side pool does the same thing**, and
+it is on by default.
+
+```
+request 1: took a SESSION lock on 44
+request 1: connection disposed ("finished")
+   advisory locks still on the server: 1
+request 2: pg_try_advisory_lock(44) -> TRUE
+           it was TOLD it acquired the lock. Request 1 still holds it.
+```
+
+`Dispose()` returns the connection to the pool rather than closing it, so the
+session lock survives. The next request gets that same physical connection,
+re-acquires the same key, and succeeds — because session advisory locks are
+*stackable within a session*.
+
+Two unrelated requests both believe they hold the same lock. One machine, no
+PgBouncer anywhere, default settings. That is `04-pg-advisory.cs`, scenario 3.
+
+Not everyone in the room runs PgBouncer. Everyone runs a connection pool.
 
 ### 3.4b Make the locks visible
 
@@ -576,6 +610,8 @@ existing repo stays as-is (it still works); this becomes the new demo set.
   02-async-lock.cs     lock+await won't compile; SemaphoreSlim traps  §1
   03-mutex-a.cs        named Mutex, holder                §1b
   03-mutex-b.cs        named Mutex, contender             §1b
+  03-mutex-scope.sh    driver: 4 scenarios, session + container       §1b
+  connection.cs        shared connection strings (#:include)
   04-pg-advisory.cs    session vs xact; pg_locks visibility           §3.3
   04b-pgbouncer-leak.cs  two clients, one backend, both "hold" the lock  §3.4
   05-pg-skip-locked.cs FOR UPDATE SKIP LOCKED as a queue  §3.2
@@ -583,7 +619,7 @@ existing repo stays as-is (it still works); this becomes the new demo set.
   07-expiry.cs         sleep past the TTL → two holders → corruption  §4
 ```
 
-Ten files, no projects. `03-mutex-a/b` stay as a pair because the whole
+Twelve files, no projects. `03-mutex-a/b` stay as a pair because the whole
 point is two OS processes.
 
 ### How they run on stage
