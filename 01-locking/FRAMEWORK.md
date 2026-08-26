@@ -150,23 +150,39 @@ answer this, add a counter or an assertion before you add the lock.
 
 ```mermaid
 flowchart TD
-    A["Name the invariant"] --> B{"Can the data store<br/>enforce it directly?"}
-    B -->|yes| B1["unique index / ON CONFLICT<br/>optimistic concurrency<br/><b>NO LOCK</b>"]
-    B -->|no| C{"Does the side effect land<br/>OUTSIDE the store?"}
+    A["Name the invariant"] --> B{"<b>1.</b> Can the data store<br/>enforce it directly?"}
+    B -->|yes| B1["unique index / EXCLUDE<br/>optimistic concurrency<br/><b>NO LOCK</b>"]
+    B -->|no| C{"<b>2.</b> Does the side effect<br/>land OUTSIDE the store?"}
     C -->|yes| C1["<b>IDEMPOTENCY KEY</b><br/>a lock cannot fix this<br/>add a lock only to reduce waste"]
-    C -->|no| D{"Can contention be made<br/>structurally impossible?"}
+    C -->|no| D{"<b>3.</b> Can contention be made<br/>structurally impossible?"}
     D -->|yes| D1["partition by key / single writer<br/><b>NO LOCK</b>"]
-    D -->|no| E{"Blast radius?"}
+    D -->|no| E{"<b>4.</b> Blast radius?"}
     E -->|"threads, one process"| E1["Interlocked, lock,<br/>SemaphoreSlim 1 1"]
     E -->|"processes, one machine"| E2["named Mutex<br/>Global-prefixed name on Unix"]
-    E -->|"across machines"| F{"Is the database<br/>the shared state?"}
+    E -->|"across machines"| F{"<b>5.</b> Is the database<br/>the shared state?"}
     F -->|yes| F1["FOR UPDATE / SKIP LOCKED<br/>pg_advisory_xact_lock"]
-    F -->|no| G{"Efficiency or<br/>correctness?"}
+    F -->|no| G{"<b>6.</b> Efficiency or<br/>correctness?"}
     G -->|efficiency| G1["Redis SET NX PX<br/>+ compare-and-delete unlock<br/>accept occasional double-runs"]
-    G -->|correctness| H{"Can the resource reject<br/>a stale writer?"}
+    G -->|correctness| H{"<b>7.</b> Can the resource reject<br/>a stale writer?"}
     H -->|yes| H1["fencing token, or<br/>lease-enforced write"]
-    H -->|no| H2["<b>STOP. Restructure.</b><br/>No lock makes this safe.<br/>Go back to 1, 2 or 3."]
+    H -->|no| H2["<b>STOP. Restructure.</b><br/>No lock makes this safe.<br/>Go back to <b>1</b>, <b>2</b> or <b>3</b> —<br/>the three exits that avoid locking"]
+
+    style B1 fill:#1b5e20,color:#fff
+    style C1 fill:#1b5e20,color:#fff
+    style D1 fill:#1b5e20,color:#fff
+    style H2 fill:#b71c1c,color:#fff
 ```
+
+**Steps 1, 2 and 3 are the exits.** They are the only branches that leave the
+diagram without a lock, and they are deliberately first — see
+[Why the order is what it is](#why-the-order-is-what-it-is). If step 7 sends
+you back, it is sending you to one of these three:
+
+| | Question | If yes |
+|---|---|---|
+| **1** | Can the data store enforce the invariant itself? | unique index, `EXCLUDE`, optimistic concurrency |
+| **2** | Does the side effect land outside the store? | idempotency key |
+| **3** | Can contention be made structurally impossible? | partition by key, single writer |
 
 ### The same tree, as text
 
@@ -215,7 +231,8 @@ flowchart TD
            (Azure Blob lease on that blob). This is the only genuinely safe
            distributed answer.
     NO  -> STOP AND RESTRUCTURE. There is no lock that makes this correct.
-           Return to step 1, 2 or 3.
+           Return to step 1 (let the store enforce it), 2 (idempotency key)
+           or 3 (partition so contention cannot happen) -- the three exits.
 ```
 
 ### Why the order is what it is
