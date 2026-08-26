@@ -766,11 +766,37 @@ entity is a runtime workaround for a routing decision you didn't make.
 
 In all four, the lock disappears because the *interleaving* disappears.
 
-### "Structurally impossible" is too strong — the honest version
+### Does Kafka partitioning mean I don't need a lock? — Yes.
+
+Answer that first, because the caveat below reads as undermining it and it
+should not. **Kafka assigns each partition to exactly one consumer in the
+group, so per-key work is serialised for you. Do not add an application-level
+lock.**
+
+And the reason it isn't a close call: **a lock would not close the residual
+window either.** The same pause that costs you your partition would also expire
+your Redis lease, so you'd carry identical exposure plus more machinery. The
+residual is a *duplicate-processing* risk, and no lock solves duplicates.
+
+Better still, you were already covered. **Kafka is at-least-once by design** —
+redelivery happens on retries, on rebalances, on failed commits. Idempotent
+handlers were already required before anyone said the word "lock". The rebalance
+window adds no new requirement.
+
+Two separate jobs, neither of them a lock:
+
+| Job | Answer |
+|---|---|
+| Serialise work per key | **partitioning** |
+| Tolerate redelivery | **idempotency** — usually one `and last_offset < @offset` |
+
+### The caveat, for completeness
 
 Verified against the Kafka KIPs (see
 [`research/11`](research/11-kafka-partitioning-exclusivity.md)). **Kafka's
-exclusivity is on partition *assignment*, not on *processing*.**
+exclusivity is on partition *assignment*, not on *processing*** — which is why
+"structurally impossible" was too strong, and why the idempotency half of the
+table above is not optional.
 
 `max.poll.interval.ms` — default **300,000 ms** — is a **lease on partition
 ownership**, and it fails in exactly the shape a Redis TTL does:
@@ -810,9 +836,9 @@ Also worth knowing before you rely on it:
 
 ### So what do you actually do?
 
-**Partitioning removes the need for a lock in the steady state, and converts
-the residual into an idempotency requirement.** That is the accurate claim, and
-it's more useful than "no lock needed" because it tells you what to do next.
+**Partitioning removes the need for a lock, and the residual is an idempotency
+requirement you already had.** That is the accurate claim. Note what it does
+*not* say: it does not say add a lock as well. A lock would not help.
 
 The cheap way to satisfy it: **condition the write on the record's offset.** You
 already have a monotonically increasing per-partition number — use it as a
