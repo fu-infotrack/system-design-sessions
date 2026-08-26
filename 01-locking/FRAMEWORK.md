@@ -182,7 +182,7 @@ you back, it is sending you to one of these three:
 |---|---|---|
 | **1** | Can the data store enforce the invariant itself? | unique index, `EXCLUDE`, optimistic concurrency |
 | **2** | Does the side effect land outside the store? | idempotency key |
-| **3** | Can contention be made structurally impossible? | partition by key, single writer |
+| **3** | Can contention be made structurally impossible? | partition by key, actor/grain, single writer — [see below](#step-3-in-practice--making-contention-impossible) |
 
 ### The same tree, as text
 
@@ -203,9 +203,13 @@ you back, it is sending you to one of these three:
            You may still add a lock, but only as an efficiency measure.
 
 3.  Can contention be made structurally impossible?
-      partition by key (Kafka, actor, consistent hash)
+      partition by key (Kafka / Service Bus sessions)
+      actor or grain per entity (Orleans)
+      consistent hashing across workers
       one designated writer
     YES -> no lock. Done.
+    Needs you to CONTROL THE ROUTING, so this usually works for queue-driven
+    work and usually fails for "any pod can serve this HTTP request".
 
 4.  Blast radius?
       threads, one process ...... Interlocked > lock/Lock > SemaphoreSlim(1,1)
@@ -352,6 +356,65 @@ invariant was written into the schema.
 
 > `CHECK` constraints are per-row and cannot see other rows, so they can't
 > enforce cross-row invariants. Reach for `UNIQUE` or `EXCLUDE` instead.
+
+---
+
+## Step 3 in practice — making contention impossible
+
+The most abstract of the three exits, so worth spelling out.
+
+A lock says *"we might both touch order-123, so let's negotiate when we get
+there."* Partitioning says *"only one of us can ever touch order-123, so
+there is nothing to negotiate."* The contention isn't defended against — it
+cannot arise.
+
+### The tell
+
+**If your lock key is an entity id — `lock:order:{id}`, `lock:tenant:{id}` —
+you are serialising per-entity at runtime, and you could have routed
+per-entity instead.** That's the signal to look at this step. A lock keyed by
+entity is a runtime workaround for a routing decision you didn't make.
+
+### The four mechanisms
+
+| | How | Example |
+|---|---|---|
+| **Partition by key** | All messages for a key land in one partition; one consumer in the group owns that partition | Kafka partition key, Azure Service Bus **sessions** |
+| **Actor / grain** | One addressable object per entity, single-threaded per activation | Orleans — the runtime guarantees one activation of `order-123`, processing one message at a time |
+| **Consistent hashing** | Each worker owns a disjoint slice: `hash(key) % N == me` | Sharded background workers |
+| **Single designated writer** | Exactly one component may write this table or aggregate; everyone else asks it to | Ownership boundaries between services |
+
+In all four, the lock disappears because the *interleaving* disappears.
+
+### When it applies — and when it doesn't
+
+This step succeeds far more often for **asynchronous, queue-driven work** than
+for synchronous request handling, and the reason is simple: **you have to
+control the routing.**
+
+- **Usually works:** background jobs, projections, event handlers, anything
+  already arriving through a broker you configure. You choose the partition
+  key, so you choose who can collide.
+- **Usually doesn't:** an HTTP request that can land on any of three pods. You
+  don't control which pod the load balancer picks, so you can't make two
+  requests for the same order land on the same process. Fall through to step 4.
+
+Other reasons it won't apply:
+
+- **The key isn't known until mid-operation** — you can't route on what you
+  don't yet know.
+- **Work spans keys.** Partitioning gives you serialisation *per key* and
+  nothing across keys. A transaction touching two orders is back to needing a
+  lock or a transaction.
+- **Hot keys become a throughput ceiling.** One partition means one consumer,
+  so a single busy tenant caps out and you cannot scale past it by adding
+  workers. This is the real cost, and it's a design constraint rather than a
+  bug.
+
+> No demo for this one. It's an architectural property rather than a behaviour
+> you can show in a single file — a toy that routes correctly and then doesn't
+> collide proves nothing the reader didn't already believe. The demos exist to
+> falsify assumptions; this step doesn't have one to falsify.
 
 ---
 
