@@ -595,6 +595,56 @@ all along (fix the operation), or you are gold-plating a way to save money.
 
 ### 7 · Correctness — can the resource fence?
 
+#### What a fencing token is
+
+Used throughout this document, so worth pinning down. A **fencing token** is a
+monotonically increasing number issued *with* the lock. The protected resource
+remembers the highest it has seen and refuses anything lower.
+
+```
+Client 1  --lock(33)--> [40s GC pause] --------------> write(33)  X rejected
+Client 2                  --lock(34)--> write(34)  ok
+Resource                                   has seen 34, so 33 is stale
+```
+
+Client 1 still *believes* it holds the lock, and nothing tells it otherwise.
+But its write carries an old number, so the write dies at the door.
+
+**You cannot move that check client-side.** "Verify the lease hasn't expired
+just before writing" fails, because a pause can land *between* the check and
+the write. No client-side check is atomic with the write — which is exactly why
+the resource has to do it.
+
+**And you are already using fencing tokens.** This is the reframe worth having:
+
+```sql
+UPDATE orders SET status = @s, version = version + 1
+ WHERE id = @id AND version = @v;   -- rows affected = 0 -> you were stale
+```
+
+That version column **is** a fencing token, and the row is the resource
+checking it. Optimistic concurrency is fencing applied to a database row —
+which is why it appears at step 1 of the tree *and* here at step 7. Kafka hands
+you one free: the record offset is monotonic per partition, so
+`and last_offset < @offset` fences with nothing invented.
+
+Genuine implementations: ZooKeeper (`zxid`), etcd (revision), MongoDB via
+`DistributedLock` (`FencingToken`), and a version column you write yourself.
+
+**Why almost nobody implements it:** the load-bearing words are *the resource*
+— it has to participate. Most real resources are "send this email", "call this
+API", "move this physical thing", and you cannot fence those. Which is
+antirez's sharpest counter, and the honest limit of the idea:
+
+> If your resource can reject a stale fencing token, your resource is already a
+> linearizable store — and if you had one of those, why did you need a strong
+> distributed lock in the first place?
+
+That is why step 7 dead-ends where it does. No fencing available means no lock
+makes it correct, so the answer is to change the design.
+
+#### The worked example
+
 **Yes — "only one node may write the consolidated report blob."** The protected
 resource *is* the blob, and Azure rejects a write without the current lease ID.
 The service enforces it, which is what fencing actually requires. Same shape as
