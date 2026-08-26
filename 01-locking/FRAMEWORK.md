@@ -59,8 +59,9 @@ that separates "safe" from "safe as long as nothing pauses."
 |---|---|---|---|
 | Redis `SET NX PX` | TTL | no | Unlock must be compare-and-delete; expires mid-work |
 | Redlock | TTL | no | Contested; see §4 of the talk. Complexity for a safety property it doesn't fully deliver |
-| etcd / ZooKeeper lease | session expiry | **yes** (revision/zxid) | Real answer, real ops cost |
-| Azure Blob lease | 15–60s or infinite | **that blob only** | `DistributedLock.Azure` leases a *sentinel* blob by default, which gives you mutual exclusion without the fencing |
+| etcd / ZooKeeper lease | session expiry — 20 s default | **yes** (revision/zxid) | Real answer, real ops cost. Best loss detection of any provider |
+| MongoDB (via `DistributedLock`) | TTL — 30 s | **yes** — exposes `FencingToken` | The only TTL provider that can be made genuinely safe |
+| Azure Blob lease | 15–60 s or infinite | **that blob only** | `DistributedLock.Azure` leases a *sentinel* blob by default — mutual exclusion without the fencing. `Duration(-1)` means a dead holder never releases |
 | Idempotency key | n/a | **yes** | Needs a dedupe store — and is stronger than any lock |
 
 ---
@@ -82,6 +83,34 @@ This is the fork everything else hangs off.
   sloppy lock is fine.
 - **Correctness** — data is corrupted, a customer is charged twice, a
   document is overwritten. **A lock alone is never sufficient here.**
+
+> ### Three ways a lock goes stale
+>
+> "Stale" means *someone else legitimately holds this lock while I still
+> think I do*. There are three distinct mechanisms, and they are not equally
+> likely. Per-provider assignment: [Part 5](#part-5--dont-write-it-yourself).
+>
+> **By wall clock** — Redis, Azure leases, MongoDB. A deadline lapses while
+> you are paused. **Normal slow work is sufficient**; nothing has to go wrong
+> and nothing tells you. Unfixable by configuration — only a fencing token
+> helps. This is the common case and it is what `07-expiry.cs` demonstrates.
+>
+> **By missed heartbeat** — ZooKeeper. A quorum stops hearing from you and
+> revokes your session. Same outcome, but no clocks are compared, so clock
+> skew and NTP steps are out of the threat model.
+>
+> **By session death** — SQL Server, Postgres, MySQL, Oracle. No clock exists
+> at any layer. The lock only goes stale if something *actively kills your
+> session*: a server-side `KILL`, an idle-session timeout, a failover, or
+> PgBouncer transaction pooling. That's a much narrower window than "your work
+> took longer than 30 seconds", and it usually announces itself as an error on
+> your next query.
+>
+> **The practical difference is how much has to go wrong.** A TTL lock expires
+> because you were slow. A session lock expires because something killed your
+> connection. That gap is the real argument for step 5 of the tree sitting
+> before step 6 — reach for the database you already have before the Redis
+> you'd have to add.
 
 **3. Where does the side effect land — inside or outside the store?**
 If the protected action reaches outside your transactional store — a payment
@@ -378,28 +407,55 @@ await using (await myDistributedLock.AcquireAsync())
 }   // Dispose releases it
 ```
 
-### The providers
+### The providers, by what releases the lock
 
-| Package | Mechanism | Lock | RW lock | Semaphore |
-|---|---|:-:|:-:|:-:|
-| `.SqlServer` | `sp_getapplock` | ✓ | ✓ | ✓ |
-| `.Postgres` | advisory locks | ✓ | ✓ | ✓ |
-| `.MySql` | MySQL / MariaDB | ✓ | ✓ | ✓ |
-| `.Oracle` | Oracle | ✓ | ✓ | ✓ |
-| `.Redis` | Redis | ✓ | | ✓ |
-| `.Azure` | blob leases | ✓ | | |
-| `.MongoDB` | MongoDB | ✓ | | |
-| `.ZooKeeper` | ZooKeeper | ✓ | | |
-| `.FileSystem` | lock files | ✓ | | |
-| `.WaitHandles` | OS global `WaitHandle`s — **Windows only** | ✓ | | |
+Audited against release 2.8.3 — full detail and sources in
+[`research/10-distributedlock-provider-expiry.md`](research/10-distributedlock-provider-expiry.md).
 
-Two provider notes that matter given everything above:
+| Provider | Released by | TTL | Auto-renew | Goes stale via | Loss detection |
+|---|---|---|---|---|---|
+| `.SqlServer` | dispose, session end, or tx end | **none** | keepalive 10 min | session death | parked `WAITFOR DELAY` |
+| `.Postgres` | dispose, session end, or tx end | **none** | off by default | session death, **PgBouncer** | parked `pg_sleep` |
+| `.MySql` | dispose, session end | **none** | keepalive 3.5 h | session death | parked `SLEEP` |
+| `.Oracle` | dispose, session end | **none** | off by default | session death | `DBMS_SESSION.SLEEP` |
+| `.Redis` | Lua CAS delete, **or PX expiry** | **30 s** | every **9 s** | **wall clock** | renewal failure — see below |
+| `.Azure` | blob delete/release, **or lease expiry** | **30 s** (15–60 s or ∞) | Duration/3 = 10 s | **wall clock** | renewal success/failure |
+| `.MongoDB` | filtered delete, **or `expiresAt` lapse** | **30 s** | Expiry/3 = 10 s | **wall clock** (server's) | `MatchedCount == 0` |
+| `.ZooKeeper` | ephemeral znode deleted | **20 s session** | client PING | **missed heartbeat** | **best in class** — session token OR'd with a live watch |
+| `.FileSystem` | OS closes the handle | none | — | not on a local FS | **none** |
+| `.WaitHandles` | kernel object destroyed | none | — | no | **none** |
 
-- **`.Postgres` supports transaction-scoped locking** via
-  `pg_advisory_xact_lock`, and its docs say this is "helpful with PgBouncer" —
-  the library has the same conclusion the demos reached the hard way.
-- **`.WaitHandles` is Windows only**, which follows from §1b: there is no
-  portable OS-level named-mutex story.
+Primitives, separately: SQL Server, Postgres, MySQL and Oracle support locks,
+reader-writer locks and semaphores; Redis adds semaphores to locks; the rest
+are locks only. `.WaitHandles` is Windows only.
+
+### Five findings worth knowing
+
+**1. MongoDB is the only provider that exposes a fencing token.**
+`MongoDistributedLockHandle.FencingToken` — so the one TTL-based provider you
+might have written off is the one that can actually be made safe, if your
+resource checks it. That's step 7 of the tree, available off the shelf.
+
+**2. Redis's loss detector is defeated by the thing it detects.** It fires
+when an extend fails, or when 30 s elapse with no successful extend — but that
+elapsed time is measured on a **local `Stopwatch` that the same pause
+freezes**. A GC pause that costs you the lock also stops the clock that would
+have told you.
+
+**3. `Azure` with `Duration(-1)` inverts the failure mode.** An infinite lease
+means the renewal loop never runs, so the token never fires and a **dead
+process holds the lock forever**. The one setting that looks safest is the one
+that removes the safety net. *(Source-derived, not tested.)*
+
+**4. `.FileSystem` and `.WaitHandles` return `CancellationToken.None`** —
+`HandleLostToken` is simply unsupported, `CanBeCanceled == false`. And on Unix
+`.FileSystem` is weaker than it looks: `FileShare.None` is advisory `flock`,
+non-atomic with open, with `ENOTSUP`/`EACCES` silently swallowed and the whole
+mechanism disableable by an environment variable. Don't use it on NFS/SMB.
+
+**5. ZooKeeper has the best detection of the ten** — the session-lost token
+OR'd with a live watch on the node, event-driven rather than polled. It pays
+for that with an ensemble to operate.
 
 ### Three things to know before you adopt it
 
