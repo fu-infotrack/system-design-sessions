@@ -17,6 +17,25 @@
 >
 > The file's core finding — that unprefixed names are POSIX-session scoped —
 > is confirmed, and is the reason the `/tmp` mount alone does nothing.
+>
+> ### Windows, now verified rather than documented (2026-08-26)
+>
+> §9's Windows material was documentation-only. Tested against a real Windows
+> SDK 10.0.400 via WSL interop:
+>
+> | Holder | Contender | Name | Result |
+> |---|---|---|---|
+> | Windows | Windows, same session | unprefixed | **BLOCKED** |
+> | Windows | WSL | unprefixed | acquired — no contention |
+> | Windows | WSL | `Global\` | acquired — no contention |
+>
+> Windows-to-Windows contention works as documented. **WSL and Windows never
+> share a named mutex, `Global\` included** — different implementations, and
+> WSL2 is a separate VM.
+>
+> Still documentation-only, not tested: Windows contention *across* Terminal
+> Services sessions (needs a service or a second RDP session), and
+> `AbandonedMutexException` on Windows.
 
 
 ## Summary

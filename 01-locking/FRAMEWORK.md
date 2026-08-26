@@ -38,7 +38,9 @@ that separates "safe" from "safe as long as nothing pauses."
 
 | Mechanism | Scope | The gotcha |
 |---|---|---|
-| named `Mutex` | **POSIX session on Unix**, not the machine | Unprefixed names are scoped to `getsid`. Use a `Global`-prefixed name or your single-instance guard silently fails across systemd units and SSH sessions |
+| named `Mutex` (Unix) | **POSIX session**, not the machine | Unprefixed names are scoped to `getsid`. Use a `Global`-prefixed name or your single-instance guard silently fails across systemd units and SSH sessions |
+| named `Mutex` (Windows) | **Terminal Services session** | Unprefixed means `Local\`. A service runs in session 0 and a desktop app in session 1+, so they don't contend. `Global\` generally needs `SeCreateGlobalPrivilege` |
+| named `Mutex` (WSL ↔ Windows) | **nothing is shared** | Different implementations entirely. `Global\` does not help. "Works on my machine" in WSL says nothing about deployed Windows behaviour |
 
 ### Database
 

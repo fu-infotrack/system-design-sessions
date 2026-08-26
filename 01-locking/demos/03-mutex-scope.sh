@@ -74,5 +74,18 @@ container's PID 1 is session 1, so it looks in session1/ and finds
 nothing. It takes BOTH a shared /tmp and a Global\ name to contend
 across the container boundary.
 
+On WINDOWS the same trap exists by a different mechanism: named mutexes
+are kernel objects, unprefixed means Local\ = per Terminal Services
+session, and a service runs in session 0 while a desktop app runs in
+session 1+. They do not contend.
+
+And across the WSL boundary nothing is shared at all -- a Windows process
+and a WSL process never contend on the same name, Global\ included. If you
+develop in WSL and deploy to Windows, "it worked on my machine" tells you
+nothing about the locking behaviour of the deployed thing.
+
+(This script tests the Linux side. The Windows rows were verified
+separately via WSL interop -- see ../NOTES.md.)
+
 The lock's scope is the scope of the thing implementing it.
 EOF

@@ -180,14 +180,20 @@ per-session isolation.
 
 ### The demo — one script, four scenarios
 
-`./03-mutex-scope.sh` runs the whole matrix. **Every cell below was
-reproduced on this machine**, and the result corrects what the research
-agent originally reported:
+`./03-mutex-scope.sh` runs the Linux half. **Every row below was reproduced
+on this machine** — Linux/WSL2 and, via interop, real Windows:
 
-| | unprefixed name | `Global\` prefix |
-|---|---|---|
-| different POSIX session | ACQUIRED — no contention | **BLOCKED** |
-| container sharing `/tmp` | ACQUIRED — no contention | **BLOCKED** |
+| Holder | Contender | Name | Result |
+|---|---|---|---|
+| Linux | Linux, **same** POSIX session | unprefixed | **BLOCKED** |
+| Linux | Linux, **different** POSIX session | unprefixed | acquired — no contention |
+| Linux | Linux, different POSIX session | `Global\` | **BLOCKED** |
+| Linux | container, `/tmp` **not** shared | unprefixed | acquired — no contention |
+| Linux | container, `/tmp` shared | unprefixed | acquired — no contention |
+| Linux | container, `/tmp` shared | `Global\` | **BLOCKED** |
+| Windows | Windows, same session | unprefixed | **BLOCKED** |
+| Windows | WSL | unprefixed | acquired — no contention |
+| Windows | WSL | `Global\` | acquired — no contention |
 
 Because on Unix .NET backs named mutexes with *files*:
 
@@ -207,9 +213,34 @@ finds nothing. Crossing the container boundary takes **both** a shared
 you run it — nearly everyone gets it wrong, including, it turns out,
 confident-sounding research.
 
-**"Cross-process" is not "cross-machine", and on Unix it isn't even
-"cross-session".** A lock's scope is the scope of the thing implementing
-it. That sentence sets up the entire second half of the talk.
+### Windows is the same trap by a different mechanism
+
+Windows named mutexes are **kernel objects**, not files. But the prefix rule
+is the same shape: unprefixed means `Local\`, which is scoped to the
+**Terminal Services session**.
+
+The practical consequence, which the docs imply but don't spell out: a
+Windows **service runs in session 0** and an interactive user in session 1+.
+So a service and a desktop app using the same unprefixed name **do not
+contend** — structurally the identical bug to the Unix one, for a completely
+different reason. Creating a `Global\` object on Windows also generally needs
+`SeCreateGlobalPrivilege`.
+
+### And the one that will actually bite this team
+
+**A WSL process and a Windows process never share a named mutex — not even
+with `Global\`.** Verified both ways. The implementations have nothing in
+common (kernel objects vs `/tmp` files), and WSL2 is a separate VM anyway.
+
+So if anyone develops in WSL and deploys to Windows, or the reverse:
+*"it worked on my machine"* carries **zero** information about the locking
+behaviour of the deployed thing. Worth saying out loud to a room that does
+exactly this.
+
+**"Cross-process" is not "cross-machine", on Unix it isn't even
+"cross-session", and across the WSL boundary it is nothing at all.** A lock's
+scope is the scope of the thing implementing it. That sentence sets up the
+entire second half of the talk.
 
 ### Abandonment is unreliable here too
 

@@ -75,9 +75,19 @@ built this way silently fails across systemd units and SSH logins.
 
 Point at the path on screen and let them read the session id out of it.
 
-*(Scenarios 3 and 4 do the same across a container boundary — mention that
-sharing `/tmp` alone is not enough, you need `Global` too. Run them only if
-you're ahead of time.)*
+**If the room runs Windows** — and they do — add the one-liner that lands:
+Windows has the identical trap by a different mechanism. Named mutexes there
+are kernel objects, unprefixed means `Local\` = per Terminal Services
+session, and **a service runs in session 0 while a desktop app runs in
+session 1+**, so they don't contend either.
+
+And the one worth ten seconds on its own: **a WSL process and a Windows
+process never share a named mutex, `Global\` included.** If you develop in
+WSL and deploy to Windows, "it worked on my machine" carries zero information
+about the deployed locking behaviour. Full matrix in `NOTES.md`.
+
+*(Scenarios 3 and 4 do the same across a container boundary — sharing `/tmp`
+alone is not enough, you need `Global` too. Run them only if you're ahead.)*
 
 ---
 
