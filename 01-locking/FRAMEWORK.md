@@ -270,7 +270,7 @@ answer.
 | Deduct from an account balance | 5 | `SELECT … FOR UPDATE` |
 | 10 workers draining a jobs table | 5 | `FOR UPDATE SKIP LOCKED` |
 | Per-tenant nightly import, no row to lock | 5 | `pg_advisory_xact_lock` |
-| Only one node should rebuild the search index | 6 (efficiency) | Redis `SET NX PX` + CAS unlock |
+| Only one node should rebuild the search index | 6 (efficiency) | Redis `SET NX PX` + CAS unlock — but see the alias-swap trap |
 | Only one node may write the consolidated report blob | 7 (yes) | Azure Blob lease — the service fences it |
 | Only one node may send a settlement to a non-idempotent partner API | 7 (**no**) | **Stop.** No lock fixes it — see below |
 
@@ -347,14 +347,57 @@ sufficient.
 
 ### 6 · Efficiency, not correctness
 
-**"Only one node should rebuild the search index."** If two nodes do it you
-waste CPU and money, and the *result is identical* — nothing is corrupted. That
-is an efficiency lock, so the cheapest thing that mostly works is correct:
-Redis `SET NX PX` with a unique token and a compare-and-delete unlock. Accept
+**"Only one node should rebuild the search index."** Three pods, each with the
+same schedule, all waking up to rebuild from source data.
+
+Why this lands on 6 and not earlier:
+
+- **Step 1** — "only one rebuild at a time" isn't a predicate over rows. No
+  constraint expresses it.
+- **Step 2** — the write leaves your store, so it *looks* like step 2. But step
+  2 is about effects you cannot safely repeat, and a deterministic overwrite
+  repeats safely: same source in, same index out. Nothing to deduplicate.
+- **Step 3** — only if you can designate one node, which is leader election.
+  Three identical replicas each running their own schedule can't.
+- **Step 5** — the protected thing is the *index*, not a row. (Rebuilding a
+  materialised view **inside** Postgres would stop here, with an advisory
+  lock.)
+- **Step 6** — a double-run costs CPU, I/O, cloud spend and load on the source
+  database. It does not produce wrong data.
+
+So: `SET NX PX` with a unique token and a compare-and-delete unlock, and accept
 that it will occasionally double-run.
 
-The test for this branch: **write down what a double-run costs.** If the answer
-is money, you're here. If it's wrong data, you're not.
+**The test for this branch: write down what a double-run costs.** Money → you
+are here. Wrong data → you are not.
+
+#### The trap: "rebuild" is not automatically an efficiency case
+
+If the rebuild is **delete-then-insert**, this is *not* step 6. Node A
+truncates while node B is halfway through writing, and you serve an empty or
+partial index. That's corruption, and it flips the problem to step 7.
+
+The real test is not *"is this a rebuild"* but **"is the operation atomically
+repeatable"**.
+
+#### Which points at the better answer
+
+Build into a **new** index and atomically swap an alias:
+
+```
+search_v17  <- build here
+search      -> alias, swapped atomically when the build completes
+```
+
+Two concurrent runs each build their own index, the last swap wins, and nobody
+ever serves a half-built result. **The lock disappears** — this is immutability
+plus an atomic pointer swap, which is step 1, not step 6.
+
+That is the general move whenever you land on 6: an efficiency lock is a *cost
+optimisation*, so ask whether restructuring removes the cost instead. If you
+keep the lock, say so in a comment — and if you find yourself adding renewal,
+watchdogs and fencing to it, you have misdiagnosed. Either it was correctness
+all along (fix the operation), or you are gold-plating a way to save money.
 
 ### 7 · Correctness — can the resource fence?
 
