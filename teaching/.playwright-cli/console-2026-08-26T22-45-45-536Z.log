@@ -1,1 +1,26 @@
 [      52ms] [ERROR] Failed to load resource: the server responded with a status of 404 (File not found) @ http://127.0.0.1:8777/favicon.ico:0
+[  146441ms] [WARNING] WARNING: cdn.mathjax.org has been retired. Check https://www.mathjax.org/cdn-shutting-down/ for migration tips. @ https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS_CHTML:31
+[  147017ms] [WARNING] Datadog Browser SDK: No storage available for session. We will not send any data. @ https://www.datadoghq-browser-agent.com/us1/v5/datadog-rum.js:0
+[  147323ms] [ERROR] [bootstrap] Failed to load route chunk: SecurityError: Failed to read the 'localStorage' property from 'Window': Access is denied for this document.
+    at G (https://substackcdn.com/bundle/static/js/65006.c237b201.js:1:49296)
+    at $ (https://substackcdn.com/bundle/static/js/65006.c237b201.js:1:49701)
+    at W (https://substackcdn.com/bundle/static/js/65006.c237b201.js:1:47308)
+    at o (https://substackcdn.com/bundle/static/js/68441.c7a57d58.js:1:15074)
+    at d (https://substackcdn.com/bundle/static/js/29581.ad30fded.js:1:5120)
+    at https://substackcdn.com/bundle/static/js/mainReactRouter.77ca71aa.js:1:10362 @ https://substackcdn.com/bundle/static/js/mainReactRouter.77ca71aa.js:0
+[  155144ms] [INFO] Loading the script 'https://www.gstatic.com/_/mss/boq-identity/_/js/k=boq-identity.IdpIFrameHttp.en_US.IQNpjXaonZo.2018.O/am=BECAAQ/d=1/rs=AOaEmlHuDWyWwWwWzPzaMWwwBDFGkQlOCA/m=base' violates the following Content Security Policy directive: "script-src 'unsafe-inline' 'unsafe-eval' blob: data:". Note that 'script-src-elem' was not explicitly set, so 'script-src' is used as a fallback. The policy is report-only, so the violation has been logged but no further action has been taken. @ https://accounts.google.com/o/oauth2/iframe#origin=https%3A%2F%2Fdisqus.com&rpcToken=593560865.3863254&clearCache=1&supportBlocked3PCookies=1:0
+[  155460ms] [WARNING] Your client application uses libraries for user authentication or authorization that are deprecated. See the [Migration Guide](https://developers.google.com/identity/gsi/web/guides/gis-migration) for more information. @ https://c.disquscdn.com/next/embed/common.bundle.712217b7f5a618b8bc684129c2acd47a.js:6
+[  155463ms] [ERROR] requestStorageAccess: Must be handling a user gesture to use. @ https://accounts.google.com/o/oauth2/iframe#origin=https%3A%2F%2Fdisqus.com&rpcToken=593560865.3863254&clearCache=1&supportBlocked3PCookies=1:0
+[  155463ms] [ERROR] requestStorageAccess: Permission denied. @ https://accounts.google.com/o/oauth2/iframe#origin=https%3A%2F%2Fdisqus.com&rpcToken=593560865.3863254&clearCache=1&supportBlocked3PCookies=1:0
+[  156073ms] [ERROR] Failed to load resource: the server responded with a status of 404 () @ https://martin.kleppmann.com/favicon.ico:0
+[  253847ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ https://ads.yieldmo.com/pbsync?is=taboola&gdpr=0&us_privacy=1---&redirectUri=https%3A%2F%2Fsync.taboola.com%2Fsg%2Fyieldmortb-network%2F1%2Frtb-h%2F%3Ftaboola_hm%3D%24UID:0
+[  254119ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ https://ads.yieldmo.com/pbsync?is=taboola&gdpr=0&us_privacy=1---&redirectUri=https%3A%2F%2Fsync.taboola.com%2Fsg%2Fyieldmortb-network%2F1%2Frtb-h%2F%3Ftaboola_hm%3D%24UID:0
+[  345794ms] [WARNING] WARNING: cdn.mathjax.org has been retired. Check https://www.mathjax.org/cdn-shutting-down/ for migration tips. @ https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS_CHTML:31
+[  346014ms] [WARNING] Datadog Browser SDK: No storage available for session. We will not send any data. @ https://www.datadoghq-browser-agent.com/us1/v5/datadog-rum.js:0
+[  346317ms] [ERROR] [bootstrap] Failed to load route chunk: SecurityError: Failed to read the 'localStorage' property from 'Window': Access is denied for this document.
+    at G (https://substackcdn.com/bundle/static/js/65006.c237b201.js:1:49296)
+    at $ (https://substackcdn.com/bundle/static/js/65006.c237b201.js:1:49701)
+    at W (https://substackcdn.com/bundle/static/js/65006.c237b201.js:1:47308)
+    at o (https://substackcdn.com/bundle/static/js/68441.c7a57d58.js:1:15074)
+    at d (https://substackcdn.com/bundle/static/js/29581.ad30fded.js:1:5120)
+    at https://substackcdn.com/bundle/static/js/mainReactRouter.77ca71aa.js:1:10362 @ https://substackcdn.com/bundle/static/js/mainReactRouter.77ca71aa.js:0

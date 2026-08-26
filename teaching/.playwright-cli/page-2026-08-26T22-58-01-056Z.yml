@@ -1,0 +1,145 @@
+- generic [active] [ref=e1]:
+  - paragraph [ref=e2]: Locking · Lesson 2 · ~8 minutes
+  - heading "The lock that was never there" [level=1] [ref=e3]
+  - paragraph [ref=e4]: Two ways to write a Postgres advisory lock in EF Core that look right, compile, run, log nothing — and protect nothing.
+  - heading "The knowledge" [level=2] [ref=e5]
+  - paragraph [ref=e6]:
+    - text: Postgres gives you a lock on any number you like, no row required. Perfect for
+    - emphasis [ref=e7]: "\"only one import per tenant at a time.\""
+    - text: "There are two flavours, and the difference is the whole lesson:"
+  - table [ref=e8]:
+    - rowgroup [ref=e9]:
+      - row "Function Scope Released by" [ref=e10]:
+        - columnheader "Function" [ref=e11]
+        - columnheader "Scope" [ref=e12]
+        - columnheader "Released by" [ref=e13]
+    - rowgroup [ref=e14]:
+      - row "pg_advisory_lock(k) the session an explicit unlock, or the connection closing" [ref=e15]:
+        - cell "pg_advisory_lock(k)" [ref=e16]:
+          - code [ref=e17]: pg_advisory_lock(k)
+        - cell "the session" [ref=e18]:
+          - text: the
+          - strong [ref=e19]: session
+        - cell "an explicit unlock, or the connection closing" [ref=e20]
+      - row "pg_advisory_xact_lock(k) the transaction commit or rollback. Always" [ref=e21]:
+        - cell "pg_advisory_xact_lock(k)" [ref=e22]:
+          - code [ref=e23]: pg_advisory_xact_lock(k)
+        - cell "the transaction" [ref=e24]:
+          - text: the
+          - strong [ref=e25]: transaction
+        - cell "commit or rollback. Always" [ref=e26]
+  - paragraph [ref=e27]:
+    - text: A session is
+    - strong [ref=e28]: a database connection
+    - text: ". And here is the thing that catches everyone:"
+  - generic [ref=e29]:
+    - generic [ref=e30]: The trap
+    - paragraph [ref=e31]:
+      - text: Under EF Core,
+      - strong [ref=e32]: you do not own the connection — the pool does.
+      - text: Your
+      - code [ref=e33]: DbContext
+      - text: is scoped to a request. The connection underneath it is not.
+  - 'heading "Failure one: the lock outlives the request" [level=3] [ref=e34]'
+  - paragraph [ref=e35]:
+    - text: EF Core closes the connection
+    - emphasis [ref=e36]: immediately after the statement
+    - text: . It goes back to the pool still holding your lock, and the next request that draws it is
+    - strong [ref=e37]: told it acquired the lock too
+    - text: ". Measured:"
+  - code [ref=e39]: "after request 1 disposed : 1 lock on server after request 2 opened (no cmd yet): 1 lock on server request 2 pg_try_advisory_lock : True <-- both hold it"
+  - paragraph [ref=e40]:
+    - text: No exception. No log line. Session-scoped locks are
+    - emphasis [ref=e41]: stackable
+    - text: ", so re-acquiring on a connection that already holds it simply succeeds."
+  - 'heading "Failure two: the lock that never existed" [level=3] [ref=e42]'
+  - paragraph [ref=e43]:
+    - text: So you switch to
+    - code [ref=e44]: pg_advisory_xact_lock
+    - text: . But if there is no
+    - strong [ref=e45]: explicit
+    - text: "transaction, EF runs your statement in autocommit — a transaction that begins and ends with that one statement. The lock is taken and released in the same breath:"
+  - code [ref=e47]: "xact_lock, no explicit tx -> locks held after statement: 0"
+  - paragraph [ref=e48]: You have no lock at all, and nothing tells you. This one is worse than the leak, because the leak at least serialises something.
+  - generic [ref=e49]:
+    - generic [ref=e50]: The rule
+    - paragraph [ref=e51]:
+      - code [ref=e52]: pg_advisory_xact_lock
+      - text: ","
+      - strong [ref=e53]:
+        - text: inside an explicit
+        - code [ref=e54]: BeginTransactionAsync()
+      - text: . Both halves are load-bearing.
+  - heading "The practice" [level=2] [ref=e55]
+  - paragraph [ref=e56]: Each of these is a plausible thing to find in a pull request. Does it protect the invariant its author intended?
+  - generic [ref=e57]:
+    - generic [ref=e58]:
+      - paragraph [ref=e59]: A request handler calls ExecuteSqlRawAsync("select pg_advisory_lock(42)"), does the work, and returns.
+      - generic [ref=e60]:
+        - button "Works" [ref=e61] [cursor=pointer]
+        - button "Broken" [ref=e62] [cursor=pointer]
+    - generic [ref=e63]:
+      - paragraph [ref=e64]: A handler opens BeginTransactionAsync, calls pg_advisory_xact_lock(42), does the work, commits.
+      - generic [ref=e65]:
+        - button "Works" [ref=e66] [cursor=pointer]
+        - button "Broken" [ref=e67] [cursor=pointer]
+    - generic [ref=e68]:
+      - paragraph [ref=e69]: A handler calls ExecuteSqlRawAsync("select pg_advisory_xact_lock(42)") and then does the work.
+      - generic [ref=e70]:
+        - button "Works" [ref=e71] [cursor=pointer]
+        - button "Broken" [ref=e72] [cursor=pointer]
+    - generic [ref=e73]:
+      - paragraph [ref=e74]: A handler calls OpenConnectionAsync, takes pg_advisory_lock(42), does the work, then CloseConnectionAsync.
+      - generic [ref=e75]:
+        - button "Works" [ref=e76] [cursor=pointer]
+        - button "Broken" [ref=e77] [cursor=pointer]
+    - generic [ref=e78]:
+      - paragraph [ref=e79]: A background service holds its own dedicated connection for its lifetime and takes pg_advisory_lock(42) to elect itself leader.
+      - generic [ref=e80]:
+        - button "Works" [ref=e81] [cursor=pointer]
+        - button "Broken" [ref=e82] [cursor=pointer]
+    - generic [ref=e83]:
+      - paragraph [ref=e84]: A handler opens a transaction and does SELECT ... FOR UPDATE on an existing order row before updating it.
+      - generic [ref=e85]:
+        - button "Works" [ref=e86] [cursor=pointer]
+        - button "Broken" [ref=e87] [cursor=pointer]
+    - paragraph [ref=e88]: 0 / 6
+  - heading "What to take away" [level=2] [ref=e89]
+  - paragraph [ref=e90]:
+    - text: The scope of an advisory lock is the scope of the
+    - strong [ref=e91]: connection
+    - text: ", not the scope of your code. Two questions settle every case:"
+  - list [ref=e92]:
+    - listitem [ref=e93]: Who owns this connection — me, or a pool?
+    - listitem [ref=e94]: Is there an explicit transaction around the lock and the work?
+  - paragraph [ref=e95]:
+    - text: And note what the rule is
+    - emphasis [ref=e96]: not
+    - text: ": session-scoped locks are not a mistake. They are exactly right when you want to hold something for the lifetime of a"
+    - emphasis [ref=e97]: process
+    - text: — leader election, a singleton daemon — on a dedicated connection you own.
+    - link "Marten's async daemon" [ref=e98] [cursor=pointer]:
+      - /url: https://martendb.io/events/projections/async-daemon.html
+    - text: elects its projection leader this way.
+  - generic [ref=e99]:
+    - text: Read this next
+    - paragraph [ref=e100]:
+      - link "PostgreSQL — Advisory Locks" [ref=e101] [cursor=pointer]:
+        - /url: https://www.postgresql.org/docs/current/explicit-locking.html#ADVISORY-LOCKS
+      - text: ". Two screens, and the only primary source you need. Note the sentence about locks being held until released or the session ends: that sentence is the entire bug."
+    - paragraph [ref=e102]:
+      - text: "Then run it yourself:"
+      - code [ref=e103]: dotnet run 10-efcore-pooling.cs
+      - text: in
+      - code [ref=e104]: 01-locking/demos
+      - text: .
+  - generic [ref=e105]:
+    - strong [ref=e106]: Think one of these answers is wrong?
+    - text: Say so — every claim here was measured against a real Postgres, and your agent can show you the script.
+  - navigation [ref=e107]:
+    - link "← Lesson 1" [ref=e108] [cursor=pointer]:
+      - /url: 0001-efficiency-or-correctness.html
+    - link "The full framework" [ref=e109] [cursor=pointer]:
+      - /url: ../../01-locking/FRAMEWORK.md
+    - link "Glossary" [ref=e110] [cursor=pointer]:
+      - /url: ../GLOSSARY.md

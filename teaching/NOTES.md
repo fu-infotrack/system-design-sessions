@@ -17,8 +17,21 @@
 - Prefers the answer before the caveat. When a section led with a caveat about
   Kafka partitioning, it read as undermining a correct pattern.
 
-## Open question
+## Unresolved oddity — do not teach
+
+Probing EF Core, a `pg_advisory_lock` followed by `pg_advisory_unlock` through
+the **same** `DbContext` (pool max size 1) returned **false** from the unlock,
+and the lock was gone afterwards — implying something released it between the
+two statements. A direct raw-Npgsql test showed the opposite: no reset happens
+on reuse, and the lock survives. The two do not reconcile yet.
+
+Not understood well enough to put in a lesson. Worth a proper investigation if
+it comes up, because it touches whether an explicit unlock is reliable at all
+under EF Core.
+
+## Open questions
 
 Whether lessons are **pre-work before the talk** or **follow-up after it**.
-This changes the zone of proximal development significantly and is not yet
-answered. Lesson 0001 is deliberately written to work either way.
+Asked once, not answered, and not worth blocking on — lessons 1 and 2 are
+written to work either way. Ask again if a lesson ever needs to assume the talk
+has happened.
