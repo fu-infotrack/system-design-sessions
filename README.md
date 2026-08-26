@@ -5,22 +5,36 @@ session is a markdown outline plus runnable demos.
 
 | # | Session | Status |
 |---|---|---|
-| 1 | [Locking](01-locking/SKELETON.md) | outline + 9 demos, research complete |
+| 1 | [Locking](01-locking/FRAMEWORK.md) | framework + 25-min talk + 10 demos |
 | 2 | Caching | planned |
 | 3 | Competing Consumer & Idempotency | planned |
 | 4 | Pagination | planned |
 
 ## Session 1 — Locking
 
-The arc is a ladder: one thread → one process → one POSIX session → one
-machine → one database → the fleet. At every rung the guarantees get weaker
-and the failure modes get stranger.
+A decision framework, not a tour of mechanisms.
 
-The thesis: **a lock is never the goal — protecting an invariant is.** Most
-people who reach for a distributed lock actually needed idempotency.
+The thesis: **a lock is never the goal — protecting an invariant is.**
 
-- **[SKELETON.md](01-locking/SKELETON.md)** — the session outline, ~80 min
-- **[demos/](01-locking/demos/)** — nine file-based `.cs` scripts, all verified running
+Most developers enter the problem at "I need a distributed lock, which one?"
+The framework's job is to make three questions happen first — can the data
+store enforce this itself, does the side effect land outside the store, and
+can contention be made structurally impossible. In practice most questions
+terminate there, and the answer is a unique constraint or an idempotency key.
+
+Evidence, from `demos/08-no-lock.cs` — eight concurrent writers each time:
+
+| | Result |
+|---|---|
+| check-then-insert, no constraint | **8 rows** — charged 8 times |
+| unique index + `ON CONFLICT DO NOTHING` | 1 row, 7 no-ops |
+| `EXCLUDE` constraint | 1 booking, 7 rejected |
+
+- **[FRAMEWORK.md](01-locking/FRAMEWORK.md)** — **start here.** The map, the eight
+  questions, the decision tree, the anti-patterns. This is the thing to bookmark.
+- **[TALK.md](01-locking/TALK.md)** — 25-minute run sheet: three demos and the framework
+- **[NOTES.md](01-locking/NOTES.md)** — the deep version, all mechanisms, ~80 min of material
+- **[demos/](01-locking/demos/)** — ten file-based `.cs` scripts, all verified running
 - **[research/](01-locking/research/)** — primary-source notes behind every claim
 
 ### Why the research folder exists

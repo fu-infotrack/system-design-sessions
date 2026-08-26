@@ -1,4 +1,13 @@
-# Session 1 — Locking
+# Locking — speaker's notes
+
+> **This is the deep version — all sections, all mechanisms, ~80 minutes of
+> material.** The talk actually runs 25 minutes: see [`TALK.md`](TALK.md) for
+> the run sheet, and [`FRAMEWORK.md`](FRAMEWORK.md) for the artifact the
+> session exists to teach.
+>
+> Kept in full because it's the source material behind both, and because the
+> per-mechanism detail is worth having when someone asks a question the run
+> sheet doesn't cover.
 
 **Audience:** engineers, mixed seniority, .NET / Postgres / Redis / Azure
 **Length:** 80 min (60-min cut marked below)

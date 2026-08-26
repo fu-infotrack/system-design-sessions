@@ -1,9 +1,9 @@
 # Locking demos
 
-Nine files, no `.csproj`, no `.sln`. Each demo is one `.cs` file you can put
+Ten demos, no `.csproj`, no `.sln`. Each demo is one `.cs` file you can put
 on screen whole and run with `dotnet run`.
 
-Every output quoted in `../SKELETON.md` was produced by these scripts on a
+Every output quoted in `../TALK.md`, `../FRAMEWORK.md` and `../NOTES.md` was produced by these scripts on a
 real machine — nothing here is illustrative-only.
 
 ## Requirements
@@ -35,6 +35,7 @@ dotnet run 04b-pgbouncer-leak.cs
 dotnet run 05-pg-skip-locked.cs            # add -- --block for the contrast
 dotnet run 06-redis-lock.cs                # add -- --naive to break it
 dotnet run 07-expiry.cs                    # add -- --fence to fix it
+dotnet run 08-no-lock.cs                   # constraints instead of locks
 ```
 
 ## What each one shows
@@ -49,6 +50,7 @@ dotnet run 07-expiry.cs                    # add -- --fence to fix it
 | `05-pg-skip-locked.cs` | 3.2 | `SKIP LOCKED` as a queue: 412 ms vs 1506 ms, zero duplicates either way. |
 | `06-redis-lock.cs` | 4.1 | Why unlock must be compare-and-delete. `--naive` deletes someone else's lock, live. |
 | `07-expiry.cs` | 4 | **The money shot.** A by-the-book lock, and the invariant breaks anyway. `--fence` shows the fix. |
+| `08-no-lock.cs` | Framework §1 | 8 racers → 8 charges unguarded, → 1 row with a unique index, → 1 booking with `EXCLUDE`. The answer is usually not a lock. |
 
 ## Flags, not file-switching
 
