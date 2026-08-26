@@ -51,7 +51,7 @@ dotnet run 09-optimistic.cs                # reference: optimistic concurrency
 | `01-counter.cs` | 1 | A race **doesn't always lose** — it runs 5×, and sometimes gets the right answer. Also: `Lock` is not measurably faster than `Monitor` here. |
 | `02-async-lock.cs` | 1.2 | `new SemaphoreSlim(1)` — a stray `Release()` silently raises the limit to 2. Proven live. |
 | `03-mutex-scope.sh` | 1b | A named `Mutex` is scoped to the **POSIX session**, not the machine. 4 scenarios, and the surprising cell is "container sharing /tmp". |
-| `04-pg-advisory.cs` | 3.3 | Session vs transaction scope, made visible through `pg_locks`. |
+| `04-pg-advisory.cs` | 3.3 | Session vs transaction scope, made visible through `pg_locks`. Session scope isn't a mistake — it's the right tool for leader election on a *dedicated* connection. |
 | `10-efcore-pooling.cs` | 3.4 | **Our stack.** EF Core closes the connection right after the statement, so one `ExecuteSqlRaw` leaks a session advisory lock. The next request is *told it acquired* it. |
 | `05-pg-skip-locked.cs` | 3.2 | `SKIP LOCKED` as a queue: 412 ms vs 1506 ms, zero duplicates either way. |
 | `06-redis-lock.cs` | 4.1 | Why unlock must be compare-and-delete. `--naive` deletes someone else's lock, live. |

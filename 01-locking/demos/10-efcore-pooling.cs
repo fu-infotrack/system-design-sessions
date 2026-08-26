@@ -25,12 +25,22 @@ Console.WriteLine("""
 
     The rule for EF Core, in one line:
 
-        pg_advisory_xact_lock inside an explicit transaction. Never
-        pg_advisory_lock.
+        For request-scoped work: pg_advisory_xact_lock inside an explicit
+        transaction. Never pg_advisory_lock on a POOLED connection.
 
     A session-scoped advisory lock is bound to the CONNECTION, and under EF
     Core you do not own the connection -- the pool does. Your DbContext is
     scoped to a request; the connection underneath it is not.
+
+    The word "pooled" is load-bearing. Session-scoped advisory locks are the
+    RIGHT tool when you want to hold something for the lifetime of a PROCESS
+    rather than a request -- leader election, a singleton daemon. There the
+    connection dropping is exactly the liveness signal you want: the process
+    dies, the lock releases, another node takes over. No TTL, no clock.
+
+    Marten's async daemon does this for projection leadership, on a dedicated
+    long-lived connection. What it never does is borrow one from the pool
+    that is serving your HTTP requests.
     """);
 
 // ---------------------------------------------------------------------------

@@ -123,12 +123,21 @@ changes *when* it leaks, not *whether*.
 
 **The rule that falls out**, and it's scenario 3:
 
-> `pg_advisory_xact_lock` inside an explicit transaction. Never
-> `pg_advisory_lock`.
+> For request-scoped work: `pg_advisory_xact_lock` inside an explicit
+> transaction. Never `pg_advisory_lock` on a pooled connection.
 
 A session-scoped advisory lock is bound to the **connection** — and under EF
 Core you don't own the connection, the pool does. Your `DbContext` is scoped
 to a request; the connection underneath it isn't.
+
+**Pre-empt the objection**, because someone will raise it and they're right:
+session-scoped advisory locks *do* have a proper use — holding something for
+the lifetime of a **process** rather than a request. Leader election. Marten's
+async daemon elects a projection leader exactly this way, on a dedicated
+long-lived connection, and parks a `pg_sleep(60)` on it to notice a failover.
+
+The distinction isn't the function name, it's the connection: **a dedicated
+connection you own, versus one borrowed from a request-serving pool.**
 
 ---
 

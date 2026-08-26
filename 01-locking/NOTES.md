@@ -391,11 +391,38 @@ Scenario 3 is the fix: `pg_advisory_xact_lock` inside an explicit
 
 **The rule, in one line:**
 
-> `pg_advisory_xact_lock` inside an explicit transaction. Never
-> `pg_advisory_lock`.
+> For request-scoped work: `pg_advisory_xact_lock` inside an explicit
+> transaction. Never `pg_advisory_lock` on a pooled connection.
 
 A session-scoped advisory lock is bound to the **connection**. Your
 `DbContext` is scoped to a request; the connection underneath it is not.
+
+### But session-scoped locks are not a mistake — they have a proper use
+
+The blanket "never `pg_advisory_lock`" is wrong, and someone in the room will
+say so. Holding a lock for the lifetime of a **process** is a real pattern:
+leader election, singleton daemon, "only one node runs this."
+
+There the connection-scoped behaviour is exactly what you want — the process
+dies, its connection drops, the lock releases, another node takes over. No
+TTL, no renewal, no clock. The connection *is* the liveness signal.
+
+**Marten's async daemon is the concrete .NET example.** `HotCold` mode elects
+a leader per projection per tenant database so each runs on exactly one
+process. Its default is `pg_try_advisory_xact_lock` holding a long-lived
+*transaction* open for as long as the node leads (session-scoped is
+configurable), and it parks `SELECT pg_catalog.pg_sleep(60)` on that
+connection to detect a database restart or failover — the same parked-query
+trick `DistributedLock` uses for `HandleLostToken`.
+
+**The distinction is the connection, not the function name:**
+
+| | Use |
+|---|---|
+| Request-scoped work | `pg_advisory_xact_lock`, short transaction |
+| Process-lifetime ownership | advisory lock on a **dedicated** connection |
+
+Neither belongs on a pooled connection serving requests.
 
 > **If you ever adopt PgBouncer**, the same bug exists one layer lower and is
 > harder to see — its own feature matrix lists `Session-level advisory locks |

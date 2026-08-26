@@ -49,7 +49,7 @@ that separates "safe" from "safe as long as nothing pauses."
 | `SELECT … FOR UPDATE` | yes — tx rollback | implicitly yes | The row must already exist |
 | `FOR UPDATE SKIP LOCKED` | yes | yes | It's a work queue, not a mutex — that's the point |
 | `pg_advisory_xact_lock` | yes — commit/rollback | no | `hashtext()` returns `integer`, so the common idiom has ~2³² keys, not 2⁶⁴ |
-| `pg_advisory_lock` | on disconnect only | no | **Leaks through any connection pool.** Under EF Core the connection closes right after the statement, so one `ExecuteSqlRaw` is enough |
+| `pg_advisory_lock` | on disconnect only | no | Correct on a **dedicated** connection (leader election); **leaks through any pool**. Under EF Core the connection closes right after the statement, so one `ExecuteSqlRaw` is enough |
 | Optimistic concurrency | n/a | **yes** | Retry storms under high contention |
 | Unique index / `ON CONFLICT` | n/a | **yes** | Free, and usually the right answer to "only once" |
 
@@ -359,7 +359,7 @@ the same — you must write the conflict path and mean it.
 | 6 | **Serializable isolation (PG SSI)** | step 5 | The invariant spans multiple rows, or rows that *don't exist yet* — phantoms, "sum of balances", "no more than N". | You can't add a retry loop; high-conflict or long transactions. |
 | 7 | **Append-only / event sourcing** | step 1 | Writes are naturally facts, not overwrites; you need an audit trail. | You mostly need current-state reads; team hasn't done it before. |
 | 8 | **Outbox** | step 2 | Write to the DB **and** publish a message, atomically, without a distributed transaction. | Only one system is written; the message must be visible with zero delay. |
-| 9 | **Leader election / leases** | step 6 | *"Only one instance should run this cron."* The most common real distributed-lock use. | You need correctness-grade exclusion — see the warning below. |
+| 9 | **Leader election / leases** | step 6 | *"Only one instance should run this cron."* The most common real distributed-lock use. On Postgres, an advisory lock on a **dedicated** connection is a strong option — see below. | You need correctness-grade exclusion — see the warning below. |
 
 ### Three things worth knowing from the research
 
@@ -373,6 +373,13 @@ check-then-insert race, when Postgres does it declaratively.
 no migration. The usual objection, that `VACUUM FREEZE` clobbers it, has been
 out of date since PG 9.4: freezing sets a flag bit and preserves the original
 `xmin`.
+
+**For leader election on Postgres, a dedicated-connection advisory lock beats
+a TTL lock.** There is no lease to expire mid-work and no clock to be wrong —
+the connection itself is the liveness signal, and a dead process drops it.
+Marten's async daemon works this way. That said, it is still efficiency-grade:
+a network partition can leave the old leader running while a new one is
+elected, so the work must tolerate two leaders briefly.
 
 **Leader election does not fence, and says so.** `client-go`'s own package
 documentation: *"This implementation does not guarantee that only one client
