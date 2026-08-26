@@ -57,7 +57,7 @@ enough. Two processes then hold it, and neither knows.</p>
 
 <p>So in the correctness column, mutual exclusion is not the answer. Something
 must reject the stale writer — the database checking a version, or the storage
-service refusing a write without the current lease. We cover that in lesson 3.</p>
+service refusing a write without the current lease. We cover that in <a href="0005-every-lease-expires.html">lesson 5</a>.</p>
 
 <div class="callout">
   <span class="label">Watch it happen</span>
@@ -111,9 +111,9 @@ lock for a problem in the right-hand column, where no amount of hardening helps.
 </div>
 
 <nav class="lesson-nav">
-  <a href="../../01-locking/FRAMEWORK.md">The full framework</a>
+  <a href="../index.html">All lessons</a>
   <a href="../GLOSSARY.md">Glossary</a>
-  <span>Next: <em>the three questions before "which lock?"</em></span>
+  <a href="0002-the-lock-that-was-never-there.html">Lesson 2 →</a>
 </nav>
 
 <script src="../assets/quiz.js"></script>

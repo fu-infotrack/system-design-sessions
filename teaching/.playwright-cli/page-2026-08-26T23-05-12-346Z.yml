@@ -1,0 +1,65 @@
+- generic [active] [ref=e1]:
+  - paragraph [ref=e2]: Six lessons · about 45 minutes total
+  - heading "Locking" [level=1] [ref=e3]
+  - paragraph [ref=e4]: Not a tour of mechanisms — a way of deciding. Work through them in order; each is short and gives one thing you can use immediately.
+  - link "1 Efficiency or correctness? One question, asked before you pick a lock, that decides everything downstream. 7 min" [ref=e5] [cursor=pointer]:
+    - /url: lessons/0001-efficiency-or-correctness.html
+    - generic [ref=e6]: "1"
+    - generic [ref=e7]:
+      - text: Efficiency or correctness?
+      - generic [ref=e8]: One question, asked before you pick a lock, that decides everything downstream.
+    - generic [ref=e9]: 7 min
+  - link "2 The lock that was never there Two ways to write an advisory lock in EF Core that compile, run, log nothing, and protect nothing. 8 min" [ref=e10] [cursor=pointer]:
+    - /url: lessons/0002-the-lock-that-was-never-there.html
+    - generic [ref=e11]: "2"
+    - generic [ref=e12]:
+      - text: The lock that was never there
+      - generic [ref=e13]: Two ways to write an advisory lock in EF Core that compile, run, log nothing, and protect nothing.
+    - generic [ref=e14]: 8 min
+  - link "3 Name the invariant The question to ask in review, and why most answers to it are the wrong kind of sentence. 6 min" [ref=e15] [cursor=pointer]:
+    - /url: lessons/0003-name-the-invariant.html
+    - generic [ref=e16]: "3"
+    - generic [ref=e17]:
+      - text: Name the invariant
+      - generic [ref=e18]: The question to ask in review, and why most answers to it are the wrong kind of sentence.
+    - generic [ref=e19]: 6 min
+  - link "4 When a lock cannot help The class of problem where no lock, however correct, prevents what you are worried about. 7 min" [ref=e20] [cursor=pointer]:
+    - /url: lessons/0004-when-a-lock-cannot-help.html
+    - generic [ref=e21]: "4"
+    - generic [ref=e22]:
+      - text: When a lock cannot help
+      - generic [ref=e23]: The class of problem where no lock, however correct, prevents what you are worried about.
+    - generic [ref=e24]: 7 min
+  - link "5 Every lease expires while you hold it You are already using several of these, and most of them are not called locks. 8 min" [ref=e25] [cursor=pointer]:
+    - /url: lessons/0005-every-lease-expires.html
+    - generic [ref=e26]: "5"
+    - generic [ref=e27]:
+      - text: Every lease expires while you hold it
+      - generic [ref=e28]: You are already using several of these, and most of them are not called locks.
+    - generic [ref=e29]: 8 min
+  - link "6 Walking the tree Capstone. No new material — just whether you can use what you have. 9 min" [ref=e30] [cursor=pointer]:
+    - /url: lessons/0006-walking-the-tree.html
+    - generic [ref=e31]: "6"
+    - generic [ref=e32]:
+      - text: Walking the tree
+      - generic [ref=e33]: Capstone. No new material — just whether you can use what you have.
+    - generic [ref=e34]: 9 min
+  - heading "Keep" [level=2] [ref=e35]
+  - paragraph [ref=e36]:
+    - link "The decision card" [ref=e37] [cursor=pointer]:
+      - /url: reference/decision-tree.html
+      - strong [ref=e38]: The decision card
+    - text: — one page, built to print. The seven questions, the anti-patterns table, and the leases you already have. Designed to be read in the ten seconds before you write a lock.
+  - paragraph [ref=e39]:
+    - link "Glossary" [ref=e40] [cursor=pointer]:
+      - /url: GLOSSARY.md
+    - text: ·
+    - link "The full framework" [ref=e41] [cursor=pointer]:
+      - /url: ../01-locking/FRAMEWORK.md
+    - text: ·
+    - link "Primary sources" [ref=e42] [cursor=pointer]:
+      - /url: RESOURCES.md
+  - generic [ref=e43]:
+    - text: Every claim in these lessons is either cited to a primary source or measured against real infrastructure — the scripts are in
+    - code [ref=e44]: 01-locking/demos
+    - text: . If something looks wrong, it might be. Say so.

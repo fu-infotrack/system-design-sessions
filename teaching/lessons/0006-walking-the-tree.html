@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 6 — Walking the tree</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+
+<p class="eyebrow">Locking · Lesson 6 · ~9 minutes · capstone</p>
+<h1>Walking the tree</h1>
+<p class="standfirst">Five lessons, one decision. This is the retrieval
+practice — no new material, just whether you can use what you have.</p>
+
+<h2>The knowledge you already have</h2>
+
+<p>Everything so far collapses into a single ordered set of questions. The order
+is the point: most people enter at step 4 and never ask the first three.</p>
+
+<pre><code>1. Can the data store enforce it?          -> no lock          [L3]
+2. Side effect outside the store?          -> idempotency      [L4]
+3. Contention structurally avoidable?      -> no lock
+4. Blast radius?                           -> picks the family
+5. Is the DB the shared state?             -> FOR UPDATE / xact [L2]
+6. Efficiency or correctness?              -> lease is / isn't enough [L1]
+7. Can the resource reject a stale writer? -> fence, or restructure [L5]</code></pre>
+
+<p><strong>Steps 1, 2 and 3 are the exits</strong> — the only branches that leave
+without a lock. Step 7 has a dead end, and that is deliberate: some designs
+cannot be made correct with a lock, and the honest output is to change the
+design.</p>
+
+<div class="callout">
+  <span class="label">Keep this</span>
+  <p>The one-page version is the <a href="../reference/decision-tree.html">reference
+  card</a> — print it, or keep the tab. It is designed to be read in the ten
+  seconds before you write a lock.</p>
+</div>
+
+<h2>The practice</h2>
+
+<p>Six scenarios, each from a different branch. Take the questions in order
+rather than jumping to an answer — the discipline is the skill.</p>
+
+<div id="q"></div>
+
+<h2>Where this goes next</h2>
+
+<p>Two things this course deliberately did not teach, and where to find them:</p>
+
+<ul>
+  <li><strong>Idempotency</strong>, which lesson 4 named as the answer whenever
+  an effect leaves your store. That is session 3 — Competing Consumer &amp;
+  Idempotency.</li>
+  <li><strong><code>FOR UPDATE SKIP LOCKED</code></strong> as a work queue, which
+  is the same session's subject in one keyword.</li>
+</ul>
+
+<p>And one thing to do this week: find a lock in our codebase, walk it through
+these seven questions, and see whether it survives. That is the whole course,
+applied once.</p>
+
+<div class="source">
+  <span class="label">Read this next</span>
+  <p>The <a href="../../01-locking/FRAMEWORK.md">full framework</a> — the map of
+  every mechanism, a worked example per branch, the provider comparison, and the
+  anti-patterns table. This lesson is its table of contents.</p>
+</div>
+
+<div class="ask">
+  <strong>Bring your agent a real one.</strong> A lock from our codebase, walked
+  through the seven questions, is worth more than all six lessons.
+</div>
+
+<nav class="lesson-nav">
+  <a href="0005-every-lease-expires.html">← Lesson 5</a>
+  <a href="../reference/decision-tree.html">Reference card</a>
+  <a href="../../01-locking/FRAMEWORK.md">The full framework</a>
+</nav>
+
+<script src="../assets/quiz.js"></script>
+<script>
+Quiz.choice({
+  mount: '#q',
+  prompt: 'Which step resolves each one?',
+  items: [
+    { text: 'A user must not be able to register the same email address twice.',
+      options: ['1 — the store can enforce it', '2 — the effect leaves the store',
+                '5 — the database is the shared state', '6 — an efficiency lease is fine'],
+      answer: '1 — the store can enforce it',
+      why: 'Uniqueness is a predicate over rows, so a unique index holds it. Two concurrent signups race, one wins, the other gets 23505 and you turn that into "already registered". It binds a migration or a manual insert too, which no lock does.' },
+
+    { text: 'A nightly job must run on only one of five identical pods. Running twice wastes CPU but corrupts nothing.',
+      options: ['6 — an efficiency lease is fine', '1 — the store can enforce it',
+                '7 — the resource must fence it', '2 — the effect leaves the store'],
+      answer: '6 — an efficiency lease is fine',
+      why: 'Write down what a double-run costs: money, not correctness. So the cheapest thing that mostly works is right — a Redis SET NX PX with a token and a compare-and-delete unlock, plus a comment saying the lock is approximate.' },
+
+    { text: 'A withdrawal must not overdraw an account. The balance is a row in our Postgres database.',
+      options: ['5 — the database is the shared state', '3 — contention is avoidable',
+                '6 — an efficiency lease is fine', '2 — the effect leaves the store'],
+      answer: '5 — the database is the shared state',
+      why: 'SELECT ... FOR UPDATE inside the transaction that does the write, so the lock and the update commit together. No TTL exists, so there is no clock to be wrong — which is why step 5 sits before step 6.' },
+
+    { text: 'A settlement instruction goes to a partner API that is not idempotent and offers no version check. Sending twice is unacceptable.',
+      options: ['7 — stop and restructure', '6 — an efficiency lease is fine',
+                '4 — pick a lock by blast radius', '5 — the database is the shared state'],
+      answer: '7 — stop and restructure',
+      why: 'Correctness, the effect is external, and the resource cannot reject a stale caller — so no lock makes this safe. Go back to step 1 or 2: record the intent behind a unique constraint and send only if you won. The dead end is the answer, not a failure to find one.' },
+
+    { text: 'Ten workers apply a stream of per-order updates arriving from a broker we configure.',
+      options: ['3 — contention is avoidable', '5 — the database is the shared state',
+                '1 — the store can enforce it', '4 — pick a lock by blast radius'],
+      answer: '3 — contention is avoidable',
+      why: 'Partition on order id and every update for one order lands on one consumer, so nothing interleaves and no lock is needed. Add an offset-conditioned write to cover the rebalance window — but that is idempotency, not a lock.' },
+
+    { text: 'A console tool writes to a local file and must not run twice on the same machine.',
+      options: ['4 — pick a lock by blast radius', '1 — the store can enforce it',
+                '3 — contention is avoidable', '6 — an efficiency lease is fine'],
+      answer: '4 — pick a lock by blast radius',
+      why: 'Multiple processes, one machine, no database involved. A named Mutex — and Global-prefixed, or on Unix it is scoped to the POSIX session and on Windows to the Terminal Services session, and your guard silently does nothing.' }
+  ]
+});
+</script>
+</body>
+</html>

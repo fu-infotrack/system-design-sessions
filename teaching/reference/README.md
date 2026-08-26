@@ -2,11 +2,14 @@
 
 Compressed, printable essentials. Lessons are read once; these are revisited.
 
-The primary reference for this topic already exists and should not be
-duplicated here: [`../../01-locking/FRAMEWORK.md`](../../01-locking/FRAMEWORK.md)
-— the mechanism map, the eight questions, the decision tree, the anti-patterns
-table, and a worked example for every branch.
+- **[decision-tree.html](decision-tree.html)** — the one-page card. Seven
+  questions, anti-patterns, and the leases you already have. Print it or keep
+  the tab; designed for the ten seconds before you write a lock.
 
-Cards in this directory exist only for things the framework does **not** carry
-in a quick-reference shape. Add one when a lesson produces something worth
-pinning above a desk, not before.
+The exhaustive reference is [`../../01-locking/FRAMEWORK.md`](../../01-locking/FRAMEWORK.md)
+— the mechanism map, a worked example per branch, the provider comparison. The
+card is deliberately *not* a summary of it: it holds only what you need at the
+moment of writing code, and links out for everything else.
+
+Add a card when a lesson produces something worth pinning above a desk, not
+before.

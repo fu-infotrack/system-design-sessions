@@ -62,5 +62,58 @@ const Quiz = (() => {
     root.appendChild(score);
   }
 
-  return { sort };
+  /* Quiz.choice({mount, prompt, items:[{text, options:[…], answer, why}]})
+     Single-select from N options, stacked full-width so length gives nothing
+     away. Use when two buckets cannot express the question. */
+  function choice({ mount, prompt, items }) {
+    const root = typeof mount === 'string' ? document.querySelector(mount) : mount;
+    root.classList.add('quiz');
+    let done = 0, right = 0;
+
+    if (prompt) root.appendChild(el('p', 'quiz-prompt', prompt));
+    const score = el('p', 'quiz-score', `0 / ${items.length}`);
+
+    items.forEach((item) => {
+      const card = el('div', 'quiz-item');
+      card.appendChild(el('p', 'quiz-text', item.text));
+
+      const list = el('div', 'quiz-options');
+      const fb = el('div', 'quiz-feedback');
+
+      item.options.forEach((opt) => {
+        const btn = el('button', 'quiz-opt', opt);
+        btn.type = 'button';
+        btn.addEventListener('click', () => {
+          if (card.dataset.answered) return;
+          card.dataset.answered = '1';
+          const ok = opt === item.answer;
+          if (ok) right++;
+          done++;
+          btn.classList.add(ok ? 'is-right' : 'is-wrong');
+          list.querySelectorAll('.quiz-opt').forEach((x) => {
+            x.disabled = true;
+            if (x.textContent === item.answer) x.classList.add('is-answer');
+          });
+          fb.innerHTML = `<strong>${ok ? 'Yes' : 'Not quite'} — ${item.answer}.</strong> ${item.why}`;
+          fb.classList.add('is-shown', ok ? 'was-right' : 'was-wrong');
+          score.textContent = `${right} / ${items.length}`;
+          if (done === items.length) {
+            score.classList.add('is-complete');
+            score.textContent += right === items.length
+              ? '  — all correct.'
+              : '  — revisit the ones you missed; the reasoning matters more than the score.';
+          }
+        });
+        list.appendChild(btn);
+      });
+
+      card.appendChild(list);
+      card.appendChild(fb);
+      root.appendChild(card);
+    });
+
+    root.appendChild(score);
+  }
+
+  return { sort, choice };
 })();

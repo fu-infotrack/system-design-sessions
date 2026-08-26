@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Locking — decision card</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  /* one-page card: tighter than a lesson, built to print */
+  body { max-width: 46rem; padding-top: 2rem; }
+  .step { display: grid; grid-template-columns: 1.6rem 1fr; gap: .7rem;
+          padding: .55rem 0; border-bottom: 1px solid var(--rule); }
+  .step .n { font: 700 .9rem/1.5 ui-sans-serif, system-ui, sans-serif; color: var(--accent); }
+  .step .q { font-weight: 600; }
+  .step .a { color: var(--ink-soft); font-size: .92rem; }
+  .exit .n { color: var(--good); }
+  .halt .n { color: var(--bad); }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 1.6rem; }
+  @media (max-width: 34rem) { .two { grid-template-columns: 1fr; } }
+  @media print { body { padding: 0; } .two { gap: 1rem; } }
+</style>
+</head>
+<body>
+
+<p class="eyebrow">Reference card · read before you write a lock</p>
+<h1>Locking decision card</h1>
+<p class="standfirst">A lock is never the goal. Protecting an invariant is.</p>
+
+<h2>The seven questions, in order</h2>
+
+<div class="step exit"><span class="n">1</span><span>
+  <span class="q">Can the data store enforce it?</span><br>
+  <span class="a">unique index · partial unique index · <code>EXCLUDE</code> · optimistic concurrency → <strong>no lock</strong></span></span></div>
+
+<div class="step exit"><span class="n">2</span><span>
+  <span class="q">Does the side effect land outside the store?</span><br>
+  <span class="a">payment, email, partner API → <strong>idempotency key</strong>. A lock cannot fix this</span></span></div>
+
+<div class="step exit"><span class="n">3</span><span>
+  <span class="q">Can contention be made structurally impossible?</span><br>
+  <span class="a">partition by key · actor/grain · one designated writer → <strong>no lock</strong></span></span></div>
+
+<div class="step"><span class="n">4</span><span>
+  <span class="q">What is the blast radius?</span><br>
+  <span class="a">threads → <code>Interlocked</code> / <code>lock</code> / <code>SemaphoreSlim(1,1)</code> · one machine → named <code>Mutex</code>, <code>Global</code>-prefixed</span></span></div>
+
+<div class="step"><span class="n">5</span><span>
+  <span class="q">Is the database the shared state?</span><br>
+  <span class="a">row exists → <code>FOR UPDATE</code> · queue → <code>SKIP LOCKED</code> · no row → <code>pg_advisory_xact_lock</code> <em>in an explicit transaction</em></span></span></div>
+
+<div class="step"><span class="n">6</span><span>
+  <span class="q">Efficiency or correctness?</span><br>
+  <span class="a">efficiency → Redis <code>SET NX PX</code> + compare-and-delete unlock; accept double-runs</span></span></div>
+
+<div class="step halt"><span class="n">7</span><span>
+  <span class="q">Can the <em>resource</em> reject a stale writer?</span><br>
+  <span class="a">yes → fencing token or lease-enforced write · <strong>no → stop and restructure.</strong> Return to 1, 2 or 3</span></span></div>
+
+<h2>Before you write it</h2>
+
+<div class="two">
+<div>
+  <h3>Must answer</h3>
+  <ol>
+    <li>What invariant am I protecting?</li>
+    <li>What does a double-run cost?</li>
+    <li>Where does the side effect land?</li>
+    <li>What is the blast radius?</li>
+  </ol>
+</div>
+<div>
+  <h3>Then pick</h3>
+  <ol start="5">
+    <li>How long is the critical section?</li>
+    <li>How much contention?</li>
+    <li>Can the resource fence?</li>
+    <li>How will I know it broke?</li>
+  </ol>
+</div>
+</div>
+
+<h2>Anti-patterns</h2>
+
+<table>
+  <thead><tr><th>Smell</th><th>Instead</th></tr></thead>
+  <tbody>
+    <tr><td><code>lock(this)</code>, <code>lock("literal")</code></td><td>a private readonly lock object</td></tr>
+    <tr><td><code>new SemaphoreSlim(1)</code></td><td><code>new SemaphoreSlim(1, 1)</code></td></tr>
+    <tr><td><code>pg_advisory_lock</code> in a request</td><td><code>pg_advisory_xact_lock</code> + explicit transaction</td></tr>
+    <tr><td><code>pg_advisory_xact_lock</code> with no transaction</td><td>same — the transaction is half the rule</td></tr>
+    <tr><td>Redis unlock with <code>DEL</code></td><td>compare-and-delete on your token</td></tr>
+    <tr><td>A lock around a payment</td><td>an idempotency key</td></tr>
+    <tr><td>A TTL lock guarding correctness</td><td>fencing, or restructure</td></tr>
+    <tr><td>Unprefixed named <code>Mutex</code></td><td><code>Global</code>-prefixed name</td></tr>
+    <tr><td>A lock with no metric</td><td>count contention, timeouts, lock-lost</td></tr>
+  </tbody>
+</table>
+
+<h2>Leases you already have</h2>
+
+<p class="a">Any system that hands you work with a timeout and reassigns it if you
+do not confirm is a lease, and can expire mid-work.</p>
+
+<table>
+  <thead><tr><th>System</th><th>The lease</th><th>Default</th></tr></thead>
+  <tbody>
+    <tr><td>Service Bus peek-lock</td><td><code>LockDuration</code></td><td>1 min, max 5</td></tr>
+    <tr><td>Kafka partition</td><td><code>max.poll.interval.ms</code></td><td>5 min</td></tr>
+    <tr><td>Redis lock</td><td>key TTL</td><td>30 s</td></tr>
+    <tr><td>Azure blob lease</td><td><code>Duration</code></td><td>30 s (15–60 s or ∞)</td></tr>
+  </tbody>
+</table>
+
+<p class="a"><strong>Never answer an overrun with a bigger number.</strong> Longer
+lease = slower recovery from a dead worker; shorter = more zombies. Make the
+second run harmless instead.</p>
+
+<nav class="lesson-nav">
+  <a href="../lessons/0006-walking-the-tree.html">Capstone lesson</a>
+  <a href="../../01-locking/FRAMEWORK.md">Full framework</a>
+  <a href="../GLOSSARY.md">Glossary</a>
+</nav>
+
+</body>
+</html>
