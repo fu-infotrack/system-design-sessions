@@ -475,6 +475,37 @@ if redis.call("get", KEYS[1]) == ARGV[1]
 
 Redis 8.4+ has this as a command: `DELEX lock:reindex IFEQ <token>`.
 
+#### And what Redlock adds
+
+Redlock is **this same recipe run against N nodes**, with a majority rule and a
+clock check on top. The primitive is identical; Redlock is the protocol around
+it.
+
+| | `SET NX PX` | Redlock |
+|---|---|---|
+| Nodes | 1 | N independent masters, **no replication between them** |
+| You hold it when | the `SET` succeeded | **majority** *and* the round trip finished inside the TTL |
+| Working window | the TTL | `TTL − (T2−T1) − clock drift` |
+| Survives a node dying | no | yes |
+| Fences the resource | no | **also no** |
+
+It exists because one instance is a single point of failure — and the obvious
+fix, a replica, doesn't work: Redis replication is **asynchronous**, so a
+failover can lose the lock write and grant the same lock twice. Redlock's answer
+is to not replicate at all.
+
+**Which to reach for.** Kleppmann's summary is why step 6 above names only the
+single-instance form: *if you want efficiency, one instance is enough and
+Redlock's complexity buys nothing; if you want correctness, Redlock doesn't get
+you there either, because it still doesn't fence.* He argues it occupies a
+middle ground that doesn't exist. antirez disputes the framing — but both agree
+it does not fence, and redis.io now says "You should implement fencing tokens."
+
+One operational trap: without `fsync=always`, a node that crashes and restarts
+**forgets it granted a lock**, so 3-of-5 becomes lockable again and two clients
+hold it. The mitigation is delayed restart — keep a crashed node out of the pool
+for longer than the maximum TTL.
+
 **Why the token is load-bearing.** Plain `DEL` does not merely fail to protect
 you — it breaks the *next* holder:
 
