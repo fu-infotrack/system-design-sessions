@@ -90,8 +90,8 @@ This is the fork everything else hangs off.
 > think I do*. There are three distinct mechanisms, and they are not equally
 > likely. Per-provider assignment: [Part 5](#part-5--dont-write-it-yourself).
 >
-> **By wall clock** — Redis, Azure leases, MongoDB. A deadline lapses while
-> you are paused. **Normal slow work is sufficient**; nothing has to go wrong
+> **By wall clock** — Redis, Azure leases, MongoDB, **and Kafka partition
+> ownership** (`max.poll.interval.ms`). A deadline lapses while you are paused. **Normal slow work is sufficient**; nothing has to go wrong
 > and nothing tells you. Unfixable by configuration — only a fencing token
 > helps. This is the common case and it is what `07-expiry.cs` demonstrates.
 >
@@ -266,7 +266,7 @@ answer.
 | A room must not be double-booked | 1 | `EXCLUDE USING gist` |
 | Two admins edit the same customer form for 5 minutes | 1 | optimistic concurrency (version token) |
 | The browser retried the POST that charges a card | 2 | **idempotency key** — not a lock |
-| Apply a stream of per-order status updates across 10 workers | 3 | partition by order id |
+| Apply a stream of per-order status updates across 10 workers | 3 | partition by order id **+ offset-conditioned writes** |
 | Refresh an in-process cache read by request threads | 4a | `Interlocked.Exchange` of an immutable snapshot |
 | A console tool must not run twice on one machine | 4b | named `Mutex`, `Global`-prefixed |
 | Deduct from an account balance | 5 | `SELECT … FOR UPDATE` |
@@ -310,8 +310,12 @@ efficiency lock, and it should say so in a comment.
 
 **"Apply a stream of per-order status updates across 10 workers."** Work is
 keyed by order id and arrives through a broker you configure, so partition on
-order id and every update for `order-123` lands on one consumer. Nothing to
-lock because nothing can interleave.
+order id and every update for `order-123` lands on one consumer. In the steady
+state there is nothing to lock because nothing interleaves.
+
+Add offset-conditioned writes (`and last_offset < @offset`) to cover the
+rebalance window — see the caveat above. Partitioning buys you the steady
+state; the offset check buys you the edge.
 
 Note the precondition doing the work: **you control the routing.** The same
 problem arriving as HTTP requests to any of three pods does not qualify — fall
@@ -684,12 +688,73 @@ entity is a runtime workaround for a routing decision you didn't make.
 
 | | How | Example |
 |---|---|---|
-| **Partition by key** | All messages for a key land in one partition; one consumer in the group owns that partition | Kafka partition key, Azure Service Bus **sessions** |
+| **Partition by key** | All messages for a key land in one partition; one consumer in the group owns that partition | Kafka partition key, Azure Service Bus **sessions** — but read the caveat below |
 | **Actor / grain** | One addressable object per entity, single-threaded per activation | Orleans — the runtime guarantees one activation of `order-123`, processing one message at a time |
 | **Consistent hashing** | Each worker owns a disjoint slice: `hash(key) % N == me` | Sharded background workers |
 | **Single designated writer** | Exactly one component may write this table or aggregate; everyone else asks it to | Ownership boundaries between services |
 
 In all four, the lock disappears because the *interleaving* disappears.
+
+### "Structurally impossible" is too strong — the honest version
+
+Verified against the Kafka KIPs (see
+[`research/11`](research/11-kafka-partitioning-exclusivity.md)). **Kafka's
+exclusivity is on partition *assignment*, not on *processing*.**
+
+`max.poll.interval.ms` — default **300,000 ms** — is a **lease on partition
+ownership**, and it fails in exactly the shape a Redis TTL does:
+
+```
+1. Consumer A polls a batch, starts processing record X
+2. A exceeds max.poll.interval.ms  (a long GC, a slow downstream call)
+3. A's BACKGROUND thread sends LeaveGroup. A's application thread is
+   never interrupted -- it keeps processing X.
+4. The partition is reassigned to B, which resumes from the last
+   COMMITTED offset -- and processes X too.
+5. A finishes and tries to commit. Rejected on generation id / member epoch.
+```
+
+Step 5 is the fencing, and it arrives **after A's work is already done**.
+Kafka's own KIP-447 documents this sequence under the heading *"Fence
+Zombie"* — it is a known, named case, not an edge.
+
+A rejected commit does not undo A's HTTP POST or its database write.
+
+Two honest points in Kafka's favour over a Redis lease: it **auto-renews** the
+lease from a background thread, and it threads a fencing token into the offset
+commit **for free**. But the residual window is real.
+
+Also worth knowing before you rely on it:
+
+- Exclusivity is scoped to **one `group.id`**. A second consumer group reads
+  the same partition independently.
+- The lock is anchored to the **partition**, not your key. Every other key
+  hashing to that partition is serialised along with yours.
+- **Kafka 4.3 still defaults to the classic protocol with eager
+  `RangeAssignor`**, where every rebalance revokes *everything* group-wide
+  before reassigning.
+- All of the above is the **Java** client. `librdkafka` — and therefore
+  `Confluent.Kafka`, i.e. **us** — enforces the session timeout locally with
+  different revocation behaviour. That gap is not yet closed.
+
+### So what do you actually do?
+
+**Partitioning removes the need for a lock in the steady state, and converts
+the residual into an idempotency requirement.** That is the accurate claim, and
+it's more useful than "no lock needed" because it tells you what to do next.
+
+The cheap way to satisfy it: **condition the write on the record's offset.** You
+already have a monotonically increasing per-partition number — use it as a
+fencing token.
+
+```sql
+update order_state
+   set status = @status, last_offset = @offset
+ where order_id = @id
+   and last_offset < @offset;     -- a zombie's older offset does nothing
+```
+
+That is step 7's fencing, obtained for free from the log's own ordering.
 
 ### When it applies — and when it doesn't
 
@@ -739,7 +804,7 @@ the same — you must write the conflict path and mean it.
 | 1 | **DB constraints** — `UNIQUE`, partial unique, `EXCLUDE` | step 1 | The invariant is a predicate over rows, and "one writer wins, the other gets an error" is acceptable. Default answer for *only one X* and *no two overlapping X*. | External work needed before deciding; spans services; you must *serialise* rather than reject; conflicts are the common case. |
 | 2 | **Optimistic concurrency** — version token | step 1 | Read-modify-write on a row, **low contention**, lost updates unacceptable. Long think-time (a user editing a form). | High contention — retries collapse throughput. Or you can't safely re-run the work. |
 | 3 | **Idempotency keys** | step 2 | The side effect is **external** — charge, email, partner API — and callers retry. Strictly stronger than a lock here. | Purely internal state; constraints or OCC are cheaper. |
-| 4 | **Single-writer / partitioning** | step 3 | Work is naturally keyed (per-account, per-order, per-tenant) and you control routing. | Key unknown until mid-operation; work spans keys; hot keys become throughput ceilings. |
+| 4 | **Single-writer / partitioning** | step 3 | Work is naturally keyed (per-account, per-order, per-tenant) and you control routing. Pair with offset-conditioned writes. | Key unknown until mid-operation; work spans keys; hot keys become throughput ceilings. You need correctness across a rebalance without an idempotency story. |
 | 5 | **Lock-free in-process** — `Interlocked`, immutable | step 4a | One process, tiny critical section, contended counter or reference swap. | The critical section does I/O or spans more than one memory location. |
 | 6 | **Serializable isolation (PG SSI)** | step 5 | The invariant spans multiple rows, or rows that *don't exist yet* — phantoms, "sum of balances", "no more than N". | You can't add a retry loop; high-conflict or long transactions. |
 | 7 | **Append-only / event sourcing** | step 1 | Writes are naturally facts, not overwrites; you need an audit trail. | You mostly need current-state reads; team hasn't done it before. |
