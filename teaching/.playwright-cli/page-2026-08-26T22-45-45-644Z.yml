@@ -1,0 +1,128 @@
+- generic [active] [ref=e1]:
+  - paragraph [ref=e2]: Locking · Lesson 1 · ~7 minutes
+  - heading "Efficiency or correctness?" [level=1] [ref=e3]
+  - paragraph [ref=e4]: One question, asked before you pick a lock, that decides everything downstream.
+  - heading "The knowledge" [level=2] [ref=e5]
+  - paragraph [ref=e6]:
+    - text: When you reach for a lock, you are protecting an
+    - strong [ref=e7]: invariant
+    - text: — a property that must stay true no matter how many things run at once. Before choosing
+    - emphasis [ref=e8]: how
+    - text: "to protect it, answer one question:"
+  - generic [ref=e9]:
+    - generic [ref=e10]: The question
+    - paragraph [ref=e11]:
+      - strong [ref=e12]: What does it cost if this runs twice?
+  - paragraph [ref=e13]: There are only two answers, and they lead to different tools.
+  - table [ref=e14]:
+    - rowgroup [ref=e15]:
+      - row "Efficiency Correctness" [ref=e16]:
+        - columnheader [ref=e17]
+        - columnheader "Efficiency" [ref=e18]
+        - columnheader "Correctness" [ref=e19]
+    - rowgroup [ref=e20]:
+      - row "A double-run costs money, CPU, duplicated work wrong data" [ref=e21]:
+        - cell "A double-run costs" [ref=e22]
+        - cell "money, CPU, duplicated work" [ref=e23]
+        - cell "wrong data" [ref=e24]
+      - row "Is a sloppy lock OK? yes no" [ref=e25]:
+        - cell "Is a sloppy lock OK?" [ref=e26]
+        - cell "yes" [ref=e27]
+        - cell "no" [ref=e28]:
+          - strong [ref=e29]: "no"
+      - row "Is a lock even enough? yes never, on its own" [ref=e30]:
+        - cell "Is a lock even enough?" [ref=e31]
+        - cell "yes" [ref=e32]
+        - cell "never, on its own" [ref=e33]:
+          - strong [ref=e34]: never, on its own
+  - paragraph [ref=e35]:
+    - text: That second row is the useful one. If you are in the efficiency column, the cheapest thing that mostly works is the
+    - emphasis [ref=e36]: right
+    - text: answer — reach for it, write a comment saying the lock is approximate, and move on.
+  - paragraph [ref=e37]: "The third row is the one that surprises people. Martin Kleppmann's argument, which the Redis documentation now repeats in its own voice, is that a lock with a timeout cannot deliver correctness by itself:"
+  - blockquote [ref=e38]:
+    - text: You should implement fencing tokens… This applies to any distributed locking system.
+    - generic [ref=e39]:
+      - text: —
+      - link "redis.io, Distributed locks" [ref=e40] [cursor=pointer]:
+        - /url: https://redis.io/docs/latest/develop/use/patterns/distributed-locks/
+  - paragraph [ref=e41]:
+    - text: "Why: every distributed lock needs a time limit, because if the holder dies nothing else can release it. And the moment it has a time limit,"
+    - strong [ref=e42]: it can expire while you are still working
+    - text: — a garbage-collection pause is enough. Two processes then hold it, and neither knows.
+  - paragraph [ref=e43]: So in the correctness column, mutual exclusion is not the answer. Something must reject the stale writer — the database checking a version, or the storage service refusing a write without the current lease. We cover that in lesson 3.
+  - generic [ref=e44]:
+    - generic [ref=e45]: Watch it happen
+    - paragraph [ref=e46]:
+      - text: Our demo
+      - code [ref=e47]: 07-expiry.cs
+      - text: runs a lock exactly by the book —
+      - code [ref=e48]: SET NX PX
+      - text: ", unique token, compare-and-delete unlock — and still loses half its updates, silently."
+    - code [ref=e50]: "cd 01-locking/demos && aspire run dotnet run 07-expiry.cs expected counter: 8 actual counter: 4 lost updates: 4"
+  - heading "The practice" [level=2] [ref=e51]
+  - paragraph [ref=e52]: Sort each of these. They are all real shapes from systems like ours. The reasoning matters more than the score — read the feedback even when you are right.
+  - generic [ref=e53]:
+    - generic [ref=e54]:
+      - paragraph [ref=e55]: A nightly job rebuilds the search index from the database. Two pods both start it.
+      - generic [ref=e56]:
+        - button "Efficiency" [ref=e57] [cursor=pointer]
+        - button "Correctness" [ref=e58] [cursor=pointer]
+    - generic [ref=e59]:
+      - paragraph [ref=e60]: A customer clicks Pay, the browser times out, and the request is retried against a different pod.
+      - generic [ref=e61]:
+        - button "Efficiency" [ref=e62] [cursor=pointer]
+        - button "Correctness" [ref=e63] [cursor=pointer]
+    - generic [ref=e64]:
+      - paragraph [ref=e65]: Two workers pick up the same job and both send the "your order shipped" email.
+      - generic [ref=e66]:
+        - button "Efficiency" [ref=e67] [cursor=pointer]
+        - button "Correctness" [ref=e68] [cursor=pointer]
+    - generic [ref=e69]:
+      - paragraph [ref=e70]: Two instances both warm the same cache entry on startup.
+      - generic [ref=e71]:
+        - button "Efficiency" [ref=e72] [cursor=pointer]
+        - button "Correctness" [ref=e73] [cursor=pointer]
+    - generic [ref=e74]:
+      - paragraph [ref=e75]: Two requests both read a balance of 100, and each subtracts 30.
+      - generic [ref=e76]:
+        - button "Efficiency" [ref=e77] [cursor=pointer]
+        - button "Correctness" [ref=e78] [cursor=pointer]
+    - generic [ref=e79]:
+      - paragraph [ref=e80]: A scheduled report is generated twice and written to the same blob.
+      - generic [ref=e81]:
+        - button "Efficiency" [ref=e82] [cursor=pointer]
+        - button "Correctness" [ref=e83] [cursor=pointer]
+    - paragraph [ref=e84]: 0 / 6
+  - heading "What to take away" [level=2] [ref=e85]
+  - paragraph [ref=e86]: The sort is not academic. It tells you when to stop.
+  - list [ref=e87]:
+    - listitem [ref=e88]:
+      - strong [ref=e89]: Efficiency
+      - text: → a Redis lease is fine. Accept the occasional double-run and say so in a comment.
+    - listitem [ref=e90]:
+      - strong [ref=e91]: Correctness
+      - text: → do not go looking for a better lock. Go looking for a way to make the second run harmless, or to make the resource refuse it.
+  - paragraph [ref=e92]: The most common expensive mistake on a team is spending a week hardening a lock for a problem in the right-hand column, where no amount of hardening helps.
+  - generic [ref=e93]:
+    - text: Read this next
+    - paragraph [ref=e94]:
+      - link "Martin Kleppmann — How to do distributed locking" [ref=e95] [cursor=pointer]:
+        - /url: https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html
+        - text: Martin Kleppmann —
+        - emphasis [ref=e96]: How to do distributed locking
+      - text: . Fifteen minutes, and the diagram of a client pausing through its own lease is the thing you will remember. Then, if you have appetite,
+      - link "antirez's reply" [ref=e97] [cursor=pointer]:
+        - /url: http://antirez.com/news/101
+      - text: — they agree on more than the internet suggests.
+  - generic [ref=e98]:
+    - strong [ref=e99]: Stuck, or think one of the answers is wrong?
+    - text: Ask your agent — it has the full framework and the primary sources behind every claim here, and arguing with the material is how this one sticks.
+  - navigation [ref=e100]:
+    - link "The full framework" [ref=e101] [cursor=pointer]:
+      - /url: ../../01-locking/FRAMEWORK.md
+    - link "Glossary" [ref=e102] [cursor=pointer]:
+      - /url: ../GLOSSARY.md
+    - generic [ref=e103]:
+      - text: "Next:"
+      - emphasis [ref=e104]: the three questions before "which lock?"

@@ -1,3 +1,94 @@
+/* Shared lesson stylesheet. Every lesson links this.
+   Tufte-ish: generous margins, serif body, restrained palette, prints well. */
+
+:root {
+  --ink:      #1a1a1a;
+  --ink-soft: #5a5a5a;
+  --paper:    #fffdf9;
+  --rule:     #d8d2c6;
+  --accent:   #8a3324;   /* oxide red, for emphasis */
+  --good:     #1b5e20;
+  --bad:      #b71c1c;
+  --code-bg:  #f4f1ea;
+  --measure:  38rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ink: #e8e4dc; --ink-soft: #a09a90; --paper: #1c1b19;
+    --rule: #3a3833; --accent: #e07a5f; --good: #7dcea0; --bad: #e57373;
+    --code-bg: #26241f;
+  }
+}
+:root[data-theme="dark"] {
+  --ink: #e8e4dc; --ink-soft: #a09a90; --paper: #1c1b19;
+  --rule: #3a3833; --accent: #e07a5f; --good: #7dcea0; --bad: #e57373;
+  --code-bg: #26241f;
+}
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font: 1.05rem/1.6 Georgia, "Iowan Old Style", "Palatino Linotype", serif;
+  margin: 0 auto;
+  padding: 3.5rem 1.5rem 6rem;
+  max-width: var(--measure);
+  -webkit-text-size-adjust: 100%;
+}
+
+.eyebrow {
+  font: 600 .7rem/1 ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: .14em; text-transform: uppercase;
+  color: var(--ink-soft); margin: 0 0 .8rem;
+}
+h1 { font-size: 2rem; line-height: 1.15; margin: 0 0 .4rem; font-weight: 600; }
+h2 { font-size: 1.25rem; margin: 2.6rem 0 .7rem; font-weight: 600; }
+h3 { font-size: 1.02rem; margin: 1.8rem 0 .5rem; font-weight: 600; }
+.standfirst { color: var(--ink-soft); font-size: 1.1rem; margin: 0 0 2.2rem; font-style: italic; }
+p, li { margin: 0 0 1rem; }
+a { color: var(--accent); text-underline-offset: 2px; }
+
+code, pre { font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace; font-size: .87em; }
+code { background: var(--code-bg); padding: .1em .35em; border-radius: 3px; }
+pre {
+  background: var(--code-bg); padding: 1rem 1.1rem; border-radius: 4px;
+  overflow-x: auto; line-height: 1.45; border-left: 3px solid var(--rule);
+}
+pre code { background: none; padding: 0; }
+
+blockquote {
+  margin: 1.4rem 0; padding: .2rem 0 .2rem 1.2rem;
+  border-left: 3px solid var(--accent); color: var(--ink-soft); font-style: italic;
+}
+blockquote cite { display: block; font-size: .85rem; font-style: normal; margin-top: .5rem; }
+
+table { border-collapse: collapse; width: 100%; margin: 1.4rem 0; font-size: .92rem; }
+th, td { text-align: left; padding: .5rem .7rem; border-bottom: 1px solid var(--rule); }
+th { font: 600 .75rem/1.3 ui-sans-serif, system-ui, sans-serif;
+     letter-spacing: .06em; text-transform: uppercase; color: var(--ink-soft); }
+.scroll-x { overflow-x: auto; }
+
+.callout {
+  border: 1px solid var(--rule); border-radius: 5px;
+  padding: 1rem 1.2rem; margin: 1.6rem 0; background: var(--code-bg);
+}
+.callout > :last-child { margin-bottom: 0; }
+.callout .label {
+  font: 600 .7rem/1 ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: .1em; text-transform: uppercase; color: var(--accent);
+  display: block; margin-bottom: .5rem;
+}
+
+.source { border-top: 1px solid var(--rule); margin-top: 3rem; padding-top: 1.2rem; }
+.source .label { font: 600 .7rem/1 ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: .1em; text-transform: uppercase; color: var(--ink-soft); }
+
+.ask {
+  margin-top: 2.5rem; padding: .9rem 1.1rem; border: 1px dashed var(--rule);
+  border-radius: 5px; font-size: .92rem; color: var(--ink-soft);
+}
+nav.lesson-nav { margin-top: 3rem; padding-top: 1.2rem; border-top: 1px solid var(--rule);
+  font-size: .9rem; display: flex; gap: 1.5rem; flex-wrap: wrap; }
 
 /* --- quiz component (assets/quiz.js) --- */
 .quiz { margin: 1.8rem 0; }
@@ -27,3 +118,10 @@
   letter-spacing: .05em; color: var(--ink-soft);
 }
 .quiz-score.is-complete { color: var(--ink); }
+
+@media print {
+  body { max-width: none; padding: 0; font-size: 11pt; background: #fff; color: #000; }
+  .quiz-buttons, .ask, nav.lesson-nav { display: none; }
+  pre, .callout { border: 1px solid #ccc; background: #fafafa; }
+  a::after { content: " (" attr(href) ")"; font-size: .75em; color: #666; }
+}
