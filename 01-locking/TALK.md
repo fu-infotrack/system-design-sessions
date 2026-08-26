@@ -1,13 +1,15 @@
 # Locking — 25 minute run sheet
 
-**Goal:** the room leaves able to use [`FRAMEWORK.md`](FRAMEWORK.md). Not a tour
-of mechanisms — a way of deciding.
+**Goal:** the room leaves able to use [`FRAMEWORK.md`](FRAMEWORK.md).
 
-**Shape:** three demos, each earning one move in the argument, with the
-framework in the middle.
+**Scope:** this is a talk about **locking**. The alternatives to locking are
+deliberately *not* presented — see [Where the no-lock material goes](#where-the-no-lock-material-goes)
+at the bottom for how they still get covered.
 
-> Deep material, all sections, all mechanisms: [`NOTES.md`](NOTES.md).
-> This file is what you actually run.
+**Shape:** three demos that climb the scope ladder — one machine, one
+database, the fleet — each one breaking an assumption. Then the framework.
+
+> Deep material, all mechanisms: [`NOTES.md`](NOTES.md).
 
 ---
 
@@ -16,14 +18,14 @@ framework in the middle.
 | | Section | Min | Cumulative |
 |---|---|---|---|
 | 1 | The problem | 2.5 | 2:30 |
-| 2 | Demo — your defaults are already broken | 3.5 | 6:00 |
-| 3 | Demo — and a correct lock isn't enough | 3.5 | 9:30 |
-| 4 | **The framework** | 7.5 | 17:00 |
-| 5 | Demo — the answer is usually not a lock | 4 | 21:00 |
+| 2 | Demo — one machine: the scope isn't what you think | 3.5 | 6:00 |
+| 3 | Demo — one database: your defaults are broken | 3.5 | 9:30 |
+| 4 | Demo — the fleet: a correct lock isn't enough | 3.5 | 13:00 |
+| 5 | **The framework** | 8 | 21:00 |
 | 6 | Wrap | 4 | 25:00 |
 
-Running long? Cut §2 to a 30-second mention (it's the least load-bearing).
-Never cut §4 or §5.
+Running long? Cut §2 — it's the most fun and the least load-bearing.
+Never cut §5.
 
 ---
 
@@ -42,22 +44,51 @@ if (order.Status == OrderStatus.Pending)
 }
 ```
 
-Let the room say "you need a lock." **Park it** — promise to come back at
-21:00 and fix it without one.
+Let the room say "you need a lock." **Park it** — you come back at 21:00.
 
-Then the thesis, and leave it on screen:
+Then the thesis, and leave it up:
 
 > A lock is never the goal. Protecting an invariant is.
 
+Say what the next ten minutes are for: *three demos, three scopes, and in
+each one a lock behaves differently from how the API name implies.*
+
 ---
 
-## 2 · Demo — your defaults are already broken — 3.5 min
+## 2 · One machine — 3.5 min
+
+```sh
+./03-mutex-scope.sh 1 2          # ~32 seconds
+```
+
+A named `Mutex`. Two processes, same name, same user, same machine — and
+**no contention**. Then the same thing with a `Global`-prefixed name, and it
+blocks.
+
+**Ask the room to predict it before you run it.** Almost nobody gets it.
+
+**Say:** on Unix .NET backs named mutexes with *files*, and an unprefixed
+name lands in `/tmp/.dotnet/shm/session<sid>/`. The POSIX session id is
+literally in the path. So an unprefixed named `Mutex` is scoped to the
+**session**, not the machine — every "only one instance of this app" guard
+built this way silently fails across systemd units and SSH logins.
+
+Point at the path on screen and let them read the session id out of it.
+
+*(Scenarios 3 and 4 do the same across a container boundary — mention that
+sharing `/tmp` alone is not enough, you need `Global` too. Run them only if
+you're ahead of time.)*
+
+---
+
+## 3 · One database — 3.5 min
 
 ```sh
 dotnet run 04-pg-advisory.cs
 ```
 
-Scroll past the first two scenarios; scenario 3 is the one:
+Scenarios 1 and 2 show session vs transaction scope. **Scenario 3 is the
+one:**
 
 ```
 request 1: took a SESSION lock on 44
@@ -68,19 +99,18 @@ request 2: pg_try_advisory_lock(44) -> TRUE
 ```
 
 **Say:** two unrelated requests both believe they hold the same lock. One
-machine. No PgBouncer. Npgsql's default settings. `Dispose()` returned the
-connection to the pool instead of closing it, the session lock rode along, and
-session advisory locks are stackable so re-acquiring *succeeds*.
+machine, no PgBouncer, Npgsql's **default settings**. `Dispose()` returned
+the connection to the pool instead of closing it, the session lock rode
+along, and session advisory locks are stackable — so re-acquiring *succeeds*.
 
-**The move this earns:** you cannot reason about locking from folklore or from
-what the API name implies. That's why the rest of this is a framework and not
-a list of tips.
+No error. No log line.
 
-*(Optional, 20s: the same bug at the infra layer is `04b-pgbouncer-leak.cs`.)*
+**The rule that falls out:** use `pg_advisory_xact_lock`, never
+`pg_advisory_lock`, behind any pool. And every one of you is behind a pool.
 
 ---
 
-## 3 · Demo — and a correct lock isn't enough — 3.5 min
+## 4 · The fleet — 3.5 min
 
 ```sh
 dotnet run 07-expiry.cs
@@ -93,20 +123,20 @@ lost updates:     4
 ```
 
 **Say:** every worker took the lock. `SET NX PX`, unique token,
-compare-and-delete unlock — everything the docs tell you to do. Updates were
-lost anyway, silently.
+compare-and-delete unlock — everything the docs tell you to do. Updates
+were lost anyway, silently.
 
-Because a distributed lock needs a TTL (the holder might die and you can't
-tell "dead" from "slow"), and **the moment it has a TTL it can expire while
-you are still working**. A GC pause is enough.
+Because a distributed lock needs a TTL — the holder might die and you can't
+tell "dead" from "slow" — and **the moment it has a TTL it can expire while
+you are still working.** A GC pause is enough.
 
-Then, if time allows:
+If you have 40 seconds spare:
 
 ```sh
 dotnet run 07-expiry.cs -- --fence
 ```
 
-3 writes rejected instead of 4 silently lost — because the **resource**
+Three writes rejected instead of four silently lost, because the **resource**
 checked a fencing token. Note what that required: the resource had to
 participate. You cannot fence an email.
 
@@ -115,11 +145,11 @@ correctness problem.
 
 ---
 
-## 4 · The framework — 7.5 min
+## 5 · The framework — 8 min
 
-The heart of the talk. [`FRAMEWORK.md`](FRAMEWORK.md) on screen.
+The heart of it. [`FRAMEWORK.md`](FRAMEWORK.md) on screen.
 
-### First: four questions you must answer (3 min)
+### Four questions you must answer (3.5 min)
 
 1. **What invariant am I protecting?** "Only charge once" is an invariant.
    "Two threads shouldn't run this method" is a symptom.
@@ -128,75 +158,30 @@ The heart of the talk. [`FRAMEWORK.md`](FRAMEWORK.md) on screen.
 3. **Where does the side effect land** — inside your store, or outside it?
 4. **What's the blast radius?** Threads, machine, or fleet.
 
-Ask the room to sort *their own* current work into question 2's two columns.
-This is the bit that makes it stick.
+Get the room to sort *their own current work* into question 2's two columns.
+This is the exercise that makes it stick, and it's worth the minute.
 
-### Then: walk the tree (4.5 min)
-
-Walk it top-down, out loud, and make the ordering the point:
+### Walk the tree (4.5 min)
 
 ```
 1. Can the data store enforce it?          -> no lock
 2. Side effect outside the store?          -> idempotency, not a lock
 3. Contention structurally avoidable?      -> no lock
-4. Blast radius?                           -> picks the family
-5. Is the DB the shared state?             -> FOR UPDATE / advisory xact
-6. Efficiency or correctness?              -> Redis is fine / is not enough
+4. Blast radius?                           -> picks the family      [demo §2]
+5. Is the DB the shared state?             -> FOR UPDATE / xact     [demo §3]
+6. Efficiency or correctness?              -> Redis is / is not enough [demo §4]
 7. Can the resource reject a stale writer? -> fence, or restructure
 ```
 
+Tie steps 4, 5 and 6 back to the three demos by name — they were the
+evidence for exactly those rows.
+
 **The line to land:** most people enter at step 4 — *"I need a distributed
-lock, which one?"* — and the whole job of this framework is to make steps 1
-through 3 happen first. In practice most of those questions terminate at step
-1 or 2.
+lock, which one?"* — and the framework's whole job is to make steps 1 to 3
+happen first.
 
 Call out step 7's dead end explicitly: a framework that always produces an
 answer is lying. Sometimes the honest output is *change the design*.
-
----
-
-## 5 · Demo — the answer is usually not a lock — 4 min
-
-Come back to the opening snippet. Then:
-
-```sh
-dotnet run 08-no-lock.cs
-```
-
-```
-1. check-then-insert, NO constraint
-   8 racers -> 8 rows   <-- the customer was charged 8 times
-
-2. unique index + ON CONFLICT DO NOTHING
-   8 racers -> 1 row, 1 winner, 7 no-ops
-
-3. EXCLUDE constraint — no overlapping bookings
-   8 racers -> 1 booking, 1 winner, 7 rejected 23P01
-```
-
-**Say:** same eight concurrent writers every time. The difference isn't the
-application code — it's whether the invariant was **written down in the
-schema**. And once it is, it binds every writer, including ones that don't
-know the rule exists: a migration, another service, someone in psql at 2am.
-
-A lock only binds the code that remembers to take it.
-
-Show the `EXCLUDE` DDL, because most people have never seen it:
-
-```sql
-create extension if not exists btree_gist;
-create table bookings (
-    room_id int not null,
-    during  tstzrange not null,
-    exclude using gist (room_id with =, during with &&)
-);
-```
-
-"No two bookings may overlap" — declarative, no lock, no read-then-write.
-
-Then fix the opening snippet: an **idempotency key** on the payment call, and
-`UPDATE orders SET status='paid' WHERE id=@id AND status='pending'` with a
-rows-affected check. No lock anywhere.
 
 ---
 
@@ -211,26 +196,50 @@ rows-affected check. No lock anywhere.
 3. **If the side effect leaves your process, you need idempotency, not mutual
    exclusion.**
 
-**Then point at the artifacts:** `FRAMEWORK.md` is the thing to bookmark — the
-map, the eight questions, the tree, the anti-patterns table.
+**Point at the artifact.** `FRAMEWORK.md` is the bookmark: the map, the eight
+questions, the tree, the anti-patterns table.
 
 **Close on the folklore table.** Eight things "everyone knows" about locking,
 none of which survived checking against primary sources — including a live
-documentation bug on Microsoft Learn. It's a good note to end on because it
-argues for the framework better than any assertion could: this is a topic
-where intuition and even documentation are unreliable, so use a checklist.
+documentation bug on Microsoft Learn. It argues for using a checklist better
+than any assertion could: this is a topic where intuition *and the docs* are
+unreliable.
+
+---
+
+## Where the no-lock material goes
+
+You asked how the alternatives get covered if they get no talk time. Three
+ways, and none of them need minutes on the clock:
+
+1. **The decision tree covers them.** Steps 1, 2 and 3 route out of locking
+   entirely, and each exit names its alternative. A dev doesn't need to have
+   sat through a lecture on constraints — they need the tree to hand them the
+   right answer at the moment they're deciding. That's the delivery mechanism.
+2. **[`FRAMEWORK.md` Part 4](FRAMEWORK.md#part-4--not-locking) is the landing
+   page** — nine approaches, each with *use when* / *avoid when*, keyed to the
+   tree step that routes there. Plus two reference demos (`08-no-lock.cs`,
+   `09-optimistic.cs`) for self-study and for settling arguments.
+3. **Session 3 teaches the biggest one properly.** Idempotency is your
+   Competing Consumer & Idempotency session — so this talk should *point* at
+   it, not pre-empt it. Same for `SKIP LOCKED`, which is the Competing
+   Consumer pattern in one keyword.
+
+In the wrap, that's one sentence: *"steps 1 to 3 of the tree point at things
+that aren't locks — they're written up in Part 4, and session 3 does
+idempotency properly."*
 
 ---
 
 ## Before you present
 
 ```sh
-cd demos && aspire run          # wait ~60s for containers
-dotnet run 04-pg-advisory.cs    # warm the build cache for all three
+cd demos && aspire run             # wait ~60s
+./03-mutex-scope.sh 1 2            # warm all three
+dotnet run 04-pg-advisory.cs
 dotnet run 07-expiry.cs
-dotnet run 08-no-lock.cs
 ```
 
 File-based apps compile on first run — do it before the room is watching.
-`07-expiry.cs` is nondeterministic by nature; run it once to check you're
-getting a satisfying number of lost updates, and re-run if it's boring.
+`07-expiry.cs` is nondeterministic; run it once and re-run if the number of
+lost updates is unimpressive.

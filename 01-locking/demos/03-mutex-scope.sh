@@ -9,8 +9,10 @@ HOLD=25
 cleanup() { pkill -f '03-mutex-a' 2>/dev/null; rm -rf "$OUT"; }
 trap cleanup EXIT
 
-echo "publishing contender for the container run..."
-dotnet publish 03-mutex-b.cs -o "$OUT" >/dev/null 2>&1 || { echo "publish failed"; exit 1; }
+if [[ " ${*:-1 2 3 4} " == *" 3 "* || " ${*:-1 2 3 4} " == *" 4 "* ]]; then
+  echo "publishing contender for the container run..."
+  dotnet publish 03-mutex-b.cs -o "$OUT" >/dev/null 2>&1 || { echo "publish failed"; exit 1; }
+fi
 
 run_case() {
   local title="$1" name="$2" mode="$3"
@@ -35,10 +37,14 @@ run_case() {
   sleep 1
 }
 
-run_case "1. Different POSIX sessions, UNPREFIXED name" 'OneTrueLock'        session
-run_case "2. Different POSIX sessions, Global\\ prefix"  'Global\OneTrueLock' session
-run_case "3. Container sharing /tmp, UNPREFIXED name"   'OneTrueLock'        docker
-run_case "4. Container sharing /tmp, Global\\ prefix"    'Global\OneTrueLock' docker
+# Pass scenario numbers to run a subset:  ./03-mutex-scope.sh 1 2
+WANT="${*:-1 2 3 4}"
+want() { [[ " $WANT " == *" $1 "* ]]; }
+
+want 1 && run_case "1. Different POSIX sessions, UNPREFIXED name" 'OneTrueLock'        session
+want 2 && run_case "2. Different POSIX sessions, Global\\ prefix"  'Global\OneTrueLock' session
+want 3 && run_case "3. Container sharing /tmp, UNPREFIXED name"   'OneTrueLock'        docker
+want 4 && run_case "4. Container sharing /tmp, Global\\ prefix"    'Global\OneTrueLock' docker
 
 cat <<'EOF'
 

@@ -307,7 +307,58 @@ invariant was written into the schema.
 
 ## Part 4 — Not locking
 
-*(Populated from `research/09-no-lock-alternatives.md` — pending.)*
+**This is not talk material — it's where the tree sends you.** Steps 1, 2 and
+3 route out of locking entirely, and this is the landing page for each of
+those exits. Depth and citations: [`research/09-no-lock-alternatives.md`](research/09-no-lock-alternatives.md).
+
+The through-line: a lock says *"I will personally prevent the bad
+interleaving."* Everything below says either **make it structurally
+impossible** or **make it detectable and cheap to redo**. The price is always
+the same — you must write the conflict path and mean it.
+
+| # | Approach | Routed from | Use when | Avoid when |
+|---|---|---|---|---|
+| 1 | **DB constraints** — `UNIQUE`, partial unique, `EXCLUDE` | step 1 | The invariant is a predicate over rows, and "one writer wins, the other gets an error" is acceptable. Default answer for *only one X* and *no two overlapping X*. | External work needed before deciding; spans services; you must *serialise* rather than reject; conflicts are the common case. |
+| 2 | **Optimistic concurrency** — version token | step 1 | Read-modify-write on a row, **low contention**, lost updates unacceptable. Long think-time (a user editing a form). | High contention — retries collapse throughput. Or you can't safely re-run the work. |
+| 3 | **Idempotency keys** | step 2 | The side effect is **external** — charge, email, partner API — and callers retry. Strictly stronger than a lock here. | Purely internal state; constraints or OCC are cheaper. |
+| 4 | **Single-writer / partitioning** | step 3 | Work is naturally keyed (per-account, per-order, per-tenant) and you control routing. | Key unknown until mid-operation; work spans keys; hot keys become throughput ceilings. |
+| 5 | **Lock-free in-process** — `Interlocked`, immutable | step 4a | One process, tiny critical section, contended counter or reference swap. | The critical section does I/O or spans more than one memory location. |
+| 6 | **Serializable isolation (PG SSI)** | step 5 | The invariant spans multiple rows, or rows that *don't exist yet* — phantoms, "sum of balances", "no more than N". | You can't add a retry loop; high-conflict or long transactions. |
+| 7 | **Append-only / event sourcing** | step 1 | Writes are naturally facts, not overwrites; you need an audit trail. | You mostly need current-state reads; team hasn't done it before. |
+| 8 | **Outbox** | step 2 | Write to the DB **and** publish a message, atomically, without a distributed transaction. | Only one system is written; the message must be visible with zero delay. |
+| 9 | **Leader election / leases** | step 6 | *"Only one instance should run this cron."* The most common real distributed-lock use. | You need correctness-grade exclusion — see the warning below. |
+
+### Three things worth knowing from the research
+
+**`EXCLUDE USING gist` is the most under-used tool on this list.** Everyone
+knows `UNIQUE`; almost nobody reaches for exclusion constraints — so "no two
+overlapping bookings" gets solved with a distributed lock around a
+check-then-insert race, when Postgres does it declaratively.
+
+**`xmin` is a free OCC token on Postgres.** Npgsql maps `IsRowVersion()` /
+`[Timestamp]` on a `uint` straight onto PG's `xmin` system column — no column,
+no migration. The usual objection, that `VACUUM FREEZE` clobbers it, has been
+out of date since PG 9.4: freezing sets a flag bit and preserves the original
+`xmin`.
+
+**Leader election does not fence, and says so.** `client-go`'s own package
+documentation: *"This implementation does not guarantee that only one client
+is acting as a leader (a.k.a. fencing)."* So the single most common real use
+of a distributed lock is efficiency-grade, not correctness-grade. Make the
+work idempotent rather than assuming one leader.
+
+> ⚠️ `SERIALIZABLE` means different things on different engines. Postgres uses
+> SSI and **aborts** conflicting transactions with `40001`; SQL Server's is
+> lock-based and **blocks**. Same keyword, very different performance profile.
+
+### Reference demos
+
+Not run in the talk — for self-study, and for settling arguments:
+
+```sh
+dotnet run 08-no-lock.cs      # 8 racers: 8 charges -> 1 row -> 1 booking
+dotnet run 09-optimistic.cs   # lost update, the rows-affected gotcha, retry cost
+```
 
 ---
 

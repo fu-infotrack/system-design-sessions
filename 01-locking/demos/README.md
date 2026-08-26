@@ -1,6 +1,11 @@
 # Locking demos
 
-Ten demos, no `.csproj`, no `.sln`. Each demo is one `.cs` file you can put
+Eleven demos, no `.csproj`, no `.sln`.
+
+**Three are used in the 25-minute talk** — `03-mutex-scope.sh`,
+`04-pg-advisory.cs`, `07-expiry.cs` — climbing the scope ladder from one
+machine to one database to the fleet. The rest are reference: for self-study,
+and for settling arguments. Each demo is one `.cs` file you can put
 on screen whole and run with `dotnet run`.
 
 Every output quoted in `../TALK.md`, `../FRAMEWORK.md` and `../NOTES.md` was produced by these scripts on a
@@ -35,7 +40,8 @@ dotnet run 04b-pgbouncer-leak.cs
 dotnet run 05-pg-skip-locked.cs            # add -- --block for the contrast
 dotnet run 06-redis-lock.cs                # add -- --naive to break it
 dotnet run 07-expiry.cs                    # add -- --fence to fix it
-dotnet run 08-no-lock.cs                   # constraints instead of locks
+dotnet run 08-no-lock.cs                   # reference: constraints instead of locks
+dotnet run 09-optimistic.cs                # reference: optimistic concurrency
 ```
 
 ## What each one shows
@@ -50,7 +56,8 @@ dotnet run 08-no-lock.cs                   # constraints instead of locks
 | `05-pg-skip-locked.cs` | 3.2 | `SKIP LOCKED` as a queue: 412 ms vs 1506 ms, zero duplicates either way. |
 | `06-redis-lock.cs` | 4.1 | Why unlock must be compare-and-delete. `--naive` deletes someone else's lock, live. |
 | `07-expiry.cs` | 4 | **The money shot.** A by-the-book lock, and the invariant breaks anyway. `--fence` shows the fix. |
-| `08-no-lock.cs` | Framework §1 | 8 racers → 8 charges unguarded, → 1 row with a unique index, → 1 booking with `EXCLUDE`. The answer is usually not a lock. |
+| `09-optimistic.cs` | Framework §4 | *Reference.* Lost update; the rows-affected gotcha; retry cost vs contention (2→0.5, 16→7.5 per worker). |
+| `08-no-lock.cs` | Framework §4 | *Reference.* | 8 racers → 8 charges unguarded, → 1 row with a unique index, → 1 booking with `EXCLUDE`. The answer is usually not a lock. |
 
 ## Flags, not file-switching
 

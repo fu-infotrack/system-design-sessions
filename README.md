@@ -7,7 +7,7 @@ session is a markdown outline plus runnable demos.
 |---|---|---|
 | 1 | [Locking](01-locking/FRAMEWORK.md) | framework + 25-min talk + 10 demos |
 | 2 | Caching | planned |
-| 3 | Competing Consumer & Idempotency | planned |
+| 3 | Competing Consumer & Idempotency | planned — session 1 defers idempotency and `SKIP LOCKED` here |
 | 4 | Pagination | planned |
 
 ## Session 1 — Locking
@@ -22,19 +22,15 @@ store enforce this itself, does the side effect land outside the store, and
 can contention be made structurally impossible. In practice most questions
 terminate there, and the answer is a unique constraint or an idempotency key.
 
-Evidence, from `demos/08-no-lock.cs` — eight concurrent writers each time:
-
-| | Result |
-|---|---|
-| check-then-insert, no constraint | **8 rows** — charged 8 times |
-| unique index + `ON CONFLICT DO NOTHING` | 1 row, 7 no-ops |
-| `EXCLUDE` constraint | 1 booking, 7 rejected |
+The 25-minute talk stays on **locking**. The alternatives aren't presented —
+the decision tree routes to them, and Part 4 of the framework is the landing
+page. Idempotency is deferred to session 3, which teaches it properly.
 
 - **[FRAMEWORK.md](01-locking/FRAMEWORK.md)** — **start here.** The map, the eight
   questions, the decision tree, the anti-patterns. This is the thing to bookmark.
-- **[TALK.md](01-locking/TALK.md)** — 25-minute run sheet: three demos and the framework
+- **[TALK.md](01-locking/TALK.md)** — 25-minute run sheet: three demos up the scope ladder, then the framework
 - **[NOTES.md](01-locking/NOTES.md)** — the deep version, all mechanisms, ~80 min of material
-- **[demos/](01-locking/demos/)** — ten file-based `.cs` scripts, all verified running
+- **[demos/](01-locking/demos/)** — eleven file-based scripts, all verified running
 - **[research/](01-locking/research/)** — primary-source notes behind every claim
 
 ### Why the research folder exists
