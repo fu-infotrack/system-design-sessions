@@ -146,6 +146,77 @@ answer this, add a counter or an assertion before you add the lock.
 
 ---
 
+## The wall-clock category is bigger than locks
+
+Most teams meet this failure mode in their **message queue or job scheduler**
+long before they meet it in a lock — and don't recognise it as the same bug.
+
+**The general rule: any system that hands you work with a timeout and
+reassigns it if you don't confirm in time is a lease**, and it has exactly the
+failure shape of `07-expiry.cs`.
+
+| System | The lease | Default |
+|---|---|---|
+| Redis lock (`DistributedLock`) | key TTL | 30 s |
+| Azure blob lease | `Duration` | 30 s (15–60 s or ∞) |
+| MongoDB (`DistributedLock`) | `expiresAt` | 30 s |
+| **Azure Service Bus peek-lock** | `LockDuration` | **1 min, max 5** |
+| **Kafka partition ownership** | `max.poll.interval.ms` | **5 min** |
+| AWS SQS | visibility timeout | *check yours* |
+| Kubernetes `Lease` | `leaseDurationSeconds` | *check yours* |
+| Hangfire | invisibility timeout | *varies by storage provider* |
+| Quartz.NET clustered | cluster check-in interval → trigger recovery | *check yours* |
+| etcd / Consul | session TTL + keepalive | *check yours* |
+
+*(Rows 1–5 verified against primary docs; the rest are the same mechanism, but
+confirm the current default for your provider before quoting a number.)*
+
+### Service Bus peek-lock, spelled out
+
+The most likely one to already be in our stack, and Microsoft's own docs
+describe the failure without any inference needed:
+
+> *"If `Complete` fails, which typically occurs at the very end of message
+> handling and **in some cases after minutes of processing work**, the
+> receiving application can decide whether to preserve the state of the work
+> and ignore the same message when it's delivered for a second time, or
+> whether to toss out the work result and retries as the message is
+> redelivered."*
+
+And the conclusion they draw is the framework's step 2, in their voice:
+
+> *"Designing for idempotent message handling becomes critical."*
+
+Two details that make it **worse** than a plain TTL:
+
+- **The lock is volatile and can be lost without you overrunning it** — a
+  service update, an OS update, changing queue properties while you hold it, a
+  dropped connection, or `SessionIdleTimeout` being shorter than the lock
+  duration. You get `MessageLockLostException`.
+- When the lock lapses, *"the message goes back to the front of the retrieval
+  order for redelivery"* — so the zombie and its replacement are racing on the
+  **same** message, immediately.
+
+### The tuning trap this creates
+
+Every lease in that table invites the same wrong instinct: *"our processing is
+slow, so raise the timeout."* Service Bus documents the cost plainly:
+
+> *"when your client stops working, the message becomes available again only
+> after the lock duration passes."*
+
+A longer lease means slower recovery from a genuinely dead worker; a shorter
+one means more zombies. **You are choosing between duplicate work and delayed
+work, and tuning cannot escape the choice.** Renewal (Service Bus auto-renew,
+Kafka's background heartbeat, `DistributedLock`'s extension cadence) narrows
+the window but doesn't close it — the renewal and the work stop at different
+moments.
+
+The way out is not a better number. It's making the work idempotent, or
+conditioning the write on a token the resource checks — which is steps 2 and 7.
+
+---
+
 ## Part 3 — The decision tree
 
 ```mermaid
