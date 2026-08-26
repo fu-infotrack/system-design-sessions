@@ -23,6 +23,12 @@ What exists, and what it actually promises. **"Fences?" means: does the
 protected resource itself reject a stale writer?** That column is the one
 that separates "safe" from "safe as long as nothing pauses."
 
+> **Reentrant** means the thread already holding the lock can take it again
+> without deadlocking — the lock counts acquisitions and releases only when the
+> count returns to zero. It is what makes a method that takes a lock safe to
+> call from inside that lock. `SemaphoreSlim` is not reentrant, so the same
+> recursive call that is fine under `lock` hangs forever.
+
 ### In-process
 
 | Mechanism | Async | Reentrant | The gotcha |

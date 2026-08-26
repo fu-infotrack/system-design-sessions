@@ -20,6 +20,16 @@ A lock whose failure corrupts data. Mutual exclusion alone is never sufficient
 here; the resource must reject stale writers.
 _Avoid_: hard lock, strict lock
 
+**Reentrant**:
+A lock the holding thread can acquire again without deadlocking; it counts
+acquisitions and releases only when the count returns to zero.
+_Avoid_: recursive lock, nested lock
+
+**Stackable**:
+Reentrancy for a Postgres advisory lock — the same session may take it more
+than once and must unlock the same number of times.
+_Avoid_: nested advisory lock
+
 **Lease**:
 A lock that expires on a clock rather than on release. Any system that hands
 you work with a timeout and reassigns it if you do not confirm in time.
