@@ -2,3 +2,4 @@ bin/
 obj/
 aspire.config.json
 *.user
+.playwright-cli/
