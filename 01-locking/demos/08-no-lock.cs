@@ -98,16 +98,21 @@ static async Task ExclusionConstraint()
 
     var rows = await Scalar("select count(*) from bookings");
     Console.WriteLine($"  {Racers} racers -> {rows} booking, {won} winner, "
-                    + $"{rejected} rejected 23P01, {deadlocked} deadlocked 40P01");
-    Console.WriteLine( "  \"no two bookings may overlap\" enforced declaratively");
-    if (deadlocked > 0)
-        Console.WriteLine("""
-      Note the 40P01s. The exclusion check takes locks internally, so
-      mutually-conflicting concurrent inserts can deadlock; Postgres aborts
-      a victim. The invariant still held -- exactly one booking exists -- but
-      a real caller must retry on 40P01 as well as handle 23P01.
+                    + $"{rejected + deadlocked} lost the race");
+    Console.WriteLine($"            of those: {rejected} x 23P01 exclusion_violation, "
+                    + $"{deadlocked} x 40P01 deadlock_detected");
+    Console.WriteLine("""
+      "no two bookings may overlap", enforced declaratively.
+
+      The 23P01/40P01 split VARIES BETWEEN RUNS, and that is worth knowing:
+      the exclusion check takes locks internally, so mutually-conflicting
+      concurrent inserts sometimes deadlock instead of being cleanly
+      rejected. Postgres aborts a victim either way.
+
+      The invariant holds regardless -- exactly one booking exists. But a
+      real caller must handle BOTH: 23P01 means "you lost, do not retry
+      blindly", 40P01 means "you were the deadlock victim, retry".
     """);
-    Console.WriteLine();
 }
 
 // ---------------------------------------------------------------------------

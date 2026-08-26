@@ -49,7 +49,7 @@ that separates "safe" from "safe as long as nothing pauses."
 | `SELECT … FOR UPDATE` | yes — tx rollback | implicitly yes | The row must already exist |
 | `FOR UPDATE SKIP LOCKED` | yes | yes | It's a work queue, not a mutex — that's the point |
 | `pg_advisory_xact_lock` | yes — commit/rollback | no | `hashtext()` returns `integer`, so the common idiom has ~2³² keys, not 2⁶⁴ |
-| `pg_advisory_lock` | on disconnect only | no | **Leaks through any connection pool** — including Npgsql's own, which is on by default |
+| `pg_advisory_lock` | on disconnect only | no | **Leaks through any connection pool.** Under EF Core the connection closes right after the statement, so one `ExecuteSqlRaw` is enough |
 | Optimistic concurrency | n/a | **yes** | Retry storms under high contention |
 | Unique index / `ON CONFLICT` | n/a | **yes** | Free, and usually the right answer to "only once" |
 
@@ -102,7 +102,7 @@ This is the fork everything else hangs off.
 > **By session death** — SQL Server, Postgres, MySQL, Oracle. No clock exists
 > at any layer. The lock only goes stale if something *actively kills your
 > session*: a server-side `KILL`, an idle-session timeout, a failover, or
-> PgBouncer transaction pooling. That's a much narrower window than "your work
+> a **connection pool** handing your connection on. Narrower than "your work
 > took longer than 30 seconds", and it usually announces itself as an error on
 > your next query.
 >
@@ -140,7 +140,7 @@ on nothing pausing at the wrong moment. Most real resources — an email, an
 API call, a physical action — cannot be fenced. Say so out loud.
 
 **8. How will you know when it breaks?**
-Locks fail silently. Both the PgBouncer/Npgsql advisory-lock violation and
+Locks fail silently. Both the EF Core advisory-lock violation and
 the expired-TTL double-run produce **no error and no log line**. If you can't
 answer this, add a counter or an assertion before you add the lock.
 
@@ -281,9 +281,11 @@ Two concurrent overlapping inserts: one commits, the other is rejected. No
 lock, no read-then-write, no race.
 
 One caveat you won't find on the tin: the exclusion check takes locks
-internally, so mutually-conflicting concurrent inserts **can deadlock**
-(`40P01`). Postgres aborts a victim and the invariant still holds — but a
-real caller must retry on `40P01` as well as handle `23P01`.
+internally, so mutually-conflicting concurrent inserts sometimes **deadlock**
+(`40P01`) instead of being cleanly rejected (`23P01`). The split varies
+run to run — `08-no-lock.cs` shows both. The invariant holds either way, but
+a real caller must handle both: `23P01` means *you lost, don't blindly
+retry*; `40P01` means *you were the deadlock victim, do retry*.
 
 ### The part people get wrong: the error path
 
@@ -316,7 +318,7 @@ catch (PostgresException e) when (e.SqlState == "23505")   // unique_violation
 |---|---|
 | check-then-insert, no constraint | **8 rows** — the customer is charged 8 times |
 | unique index + `ON CONFLICT DO NOTHING` | 1 row, 1 winner, 7 no-ops |
-| `EXCLUDE` constraint | 1 booking, 1 winner, 7 rejected with `23P01` |
+| `EXCLUDE` constraint | 1 booking, 1 winner, 7 lost the race |
 
 Same application concurrency in all three. The only difference is whether the
 invariant was written into the schema.
@@ -415,7 +417,7 @@ Audited against release 2.8.3 — full detail and sources in
 | Provider | Released by | TTL | Auto-renew | Goes stale via | Loss detection |
 |---|---|---|---|---|---|
 | `.SqlServer` | dispose, session end, or tx end | **none** | keepalive 10 min | session death | parked `WAITFOR DELAY` |
-| `.Postgres` | dispose, session end, or tx end | **none** | off by default | session death, **PgBouncer** | parked `pg_sleep` |
+| `.Postgres` | dispose, session end, or tx end | **none** | off by default | session death, **connection pooling** | parked `pg_sleep` |
 | `.MySql` | dispose, session end | **none** | keepalive 3.5 h | session death | parked `SLEEP` |
 | `.Oracle` | dispose, session end | **none** | off by default | session death | `DBMS_SESSION.SLEEP` |
 | `.Redis` | Lua CAS delete, **or PX expiry** | **30 s** | every **9 s** | **wall clock** | renewal failure — see below |
@@ -509,7 +511,7 @@ may be unachievable. Same conclusion as step 7.
 |---|---|---|
 | `lock(this)`, `lock(typeof(X))`, `lock("literal")` | You're sharing a lock with code you don't control; string literals are interned process-wide | A private `readonly` lock object |
 | `new SemaphoreSlim(1)` | maxCount is `int.MaxValue`; a stray `Release()` silently raises the limit | `new SemaphoreSlim(1, 1)` |
-| `pg_advisory_lock` in a web request | Leaks onto the pooled connection; the next request inherits it | `pg_advisory_xact_lock` |
+| `pg_advisory_lock` in a web request | Leaks onto the pooled connection; under EF Core on the very next statement | `pg_advisory_xact_lock` in an explicit transaction |
 | Unlocking Redis with `DEL` | Deletes whoever holds it *now*, which may not be you | Compare-and-delete on your token |
 | A distributed lock around a payment | Cannot be atomic with the side effect | Idempotency key |
 | A lock with a TTL guarding "correctness" | The TTL will expire mid-work | Fencing, or restructure |
@@ -530,6 +532,6 @@ citations in [`research/`](research/).
 | `SemaphoreMaxCountExceededException` | Doesn't exist — it's `SemaphoreFullException` |
 | Advisory locks have no timeout | `lock_timeout` and `statement_timeout` both apply |
 | A named `Mutex` is machine-wide | On Unix it's scoped to the POSIX session |
-| The PgBouncer issue is a leaked lock | It's a silent *mutual-exclusion violation* — a second client is told it acquired the lock |
-| You need PgBouncer to hit that bug | Npgsql's own pool does it, on default settings |
+| A leaked advisory lock just stalls the next caller | It's a silent *mutual-exclusion violation* — the next caller is **told it acquired** the lock |
+| You need PgBouncer to hit that bug | EF Core on Npgsql's default pool does it, on a single statement |
 | Azure blob lease ID is a fencing token | Equality-checked GUID, not monotonic |

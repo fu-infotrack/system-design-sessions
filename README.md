@@ -49,7 +49,7 @@ Claims that did not survive:
 | `SemaphoreMaxCountExceededException` | Doesn't exist. It's `SemaphoreFullException`. |
 | Advisory locks have no timeout | `lock_timeout` and `statement_timeout` both apply. |
 | A named `Mutex` is machine-wide | On Unix it's scoped to the **POSIX session**. |
-| The PgBouncer problem is a leaked lock | It's a *silent mutual-exclusion violation* — a second client is told it acquired the lock. |
+| A leaked advisory lock just stalls the next caller | It's a *silent mutual-exclusion violation* — under EF Core the next request is **told it acquired** the lock. |
 | Azure blob lease ID is a fencing token | Equality-checked GUID, not monotonic. And `DistributedLock.Azure` leases a sentinel blob by default. |
 
 That table is itself the closing slide.
@@ -58,7 +58,7 @@ That table is itself the closing slide.
 
 ```sh
 cd 01-locking/demos
-aspire run                    # Postgres + PgBouncer + Redis
+aspire run                    # Postgres + Redis
 dotnet run 01-counter.cs      # then one per section
 ```
 

@@ -18,24 +18,6 @@ var postgres = builder.AddPostgres("postgres", password: pw)
 
 var lockdb = postgres.AddDatabase("lockdb");
 
-// PgBouncer in TRANSACTION pooling mode, pool size 1.
-// Pool size 1 is what makes the §3.4 leak demo deterministic: both clients
-// are guaranteed to land on the same backend, so you see the silent
-// mutual-exclusion violation rather than the hang.
-builder.AddContainer("pgbouncer", "edoburu/pgbouncer", "latest")
-       .WithEndpoint(port: 56432, targetPort: 5432, name: "pgb", scheme: "tcp", isProxied: false)
-       .WithEnvironment("DB_HOST", "postgres")
-       .WithEnvironment("DB_PORT", "5432")
-       .WithEnvironment("DB_USER", "postgres")
-       .WithEnvironment("DB_PASSWORD", "postgres")
-       .WithEnvironment("DB_NAME", "lockdb")
-       .WithEnvironment("POOL_MODE", "transaction")
-       .WithEnvironment("DEFAULT_POOL_SIZE", "1")
-       .WithEnvironment("MAX_CLIENT_CONN", "100")
-       .WithEnvironment("AUTH_TYPE", "scram-sha-256")
-       .WithEnvironment("ADMIN_USERS", "postgres")
-       .WaitFor(postgres);
-
 // Deliberately NOT builder.AddRedis(). Aspire's Redis integration defaults to
 // TLS on 6379 plus a generated --requirepass, which is correct for a real app
 // and pure noise for a lock demo -- it also stops you poking at the keys with

@@ -19,7 +19,7 @@ database, the fleet — each one breaking an assumption. Then the framework.
 |---|---|---|---|
 | 1 | The problem | 2.5 | 2:30 |
 | 2 | Demo — one machine: the scope isn't what you think | 3.5 | 6:00 |
-| 3 | Demo — one database: your defaults are broken | 3.5 | 9:30 |
+| 3 | Demo — one database: EF Core leaks your lock | 3.5 | 9:30 |
 | 4 | Demo — the fleet: a correct lock isn't enough | 3.5 | 13:00 |
 | 5 | **The framework** | 8 | 21:00 |
 | 6 | Wrap | 4 | 25:00 |
@@ -94,29 +94,41 @@ alone is not enough, you need `Global` too. Run them only if you're ahead.)*
 ## 3 · One database — 3.5 min
 
 ```sh
-dotnet run 04-pg-advisory.cs
+dotnet run 10-efcore-pooling.cs
 ```
 
-Scenarios 1 and 2 show session vs transaction scope. **Scenario 3 is the
-one:**
+This is our stack: EF Core on Npgsql's pool, which is on by default.
 
 ```
-request 1: took a SESSION lock on 44
-request 1: connection disposed ("finished")
-   advisory locks still on the server: 1
-request 2: pg_try_advisory_lock(44) -> TRUE
-           it was TOLD it acquired the lock. Request 1 still holds it.
+request 1: took pg_advisory_lock(101)
+           connection state right after: Closed      <-- already back in the pool
+request 1: DbContext disposed
+   server still holds it: 1
+request 2: pg_try_advisory_lock(101) -> TRUE
+           ^ two requests, same lock, both told they hold it.
 ```
 
-**Say:** two unrelated requests both believe they hold the same lock. One
-machine, no PgBouncer, Npgsql's **default settings**. `Dispose()` returned
-the connection to the pool instead of closing it, the session lock rode
-along, and session advisory locks are stackable — so re-acquiring *succeeds*.
+**Say:** two unrelated requests both believe they hold the same lock. Default
+settings, nothing exotic. And look at the connection state — **EF Core closed
+it right after the statement**. You don't have to reach the end of the
+request; one `ExecuteSqlRaw` hands a lock-holding connection back to the pool.
+
+Session advisory locks are *stackable*, so when the next request draws that
+same connection and re-acquires, it **succeeds**.
 
 No error. No log line.
 
-**The rule that falls out:** use `pg_advisory_xact_lock`, never
-`pg_advisory_lock`, behind any pool. And every one of you is behind a pool.
+Scenario 2 kills the obvious workaround: explicitly opening the connection
+changes *when* it leaks, not *whether*.
+
+**The rule that falls out**, and it's scenario 3:
+
+> `pg_advisory_xact_lock` inside an explicit transaction. Never
+> `pg_advisory_lock`.
+
+A session-scoped advisory lock is bound to the **connection** — and under EF
+Core you don't own the connection, the pool does. Your `DbContext` is scoped
+to a request; the connection underneath it isn't.
 
 ---
 
@@ -263,7 +275,7 @@ idempotency properly."*
 ```sh
 cd demos && aspire run             # wait ~60s
 ./03-mutex-scope.sh 1 2            # warm all three
-dotnet run 04-pg-advisory.cs
+dotnet run 10-efcore-pooling.cs
 dotnet run 07-expiry.cs
 ```
 

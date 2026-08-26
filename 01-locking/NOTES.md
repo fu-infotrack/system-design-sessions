@@ -356,65 +356,53 @@ idiom. **`hashtext()` returns `integer`, not `bigint`** — so you get 2³², no
 about **77,000 keys**. Two unrelated keys silently serialising, surfacing
 as latency nobody can explain. Use the two-int form and namespace it.
 
-### 3.4 The PgBouncer leak — demo this, it's the best gotcha in the talk
+### 3.4 The pooling leak — demo this, it's the best gotcha in the talk
 
 **Default to `pg_advisory_xact_lock`.** Two reasons; the second is the one
 that reaches production.
 
 1. Session locks are *stackable* — acquire twice, unlock twice. Easy to
    leak by one.
-2. Session locks ride the pooled connection.
+2. Session locks ride the pooled connection, and **under EF Core you do not
+   own the connection — the pool does.**
 
-PgBouncer's own feature matrix is blunt about it. Note it has exactly **two**
-mode columns — Session and Transaction, no Statement column (summaries
-routinely invent one) — and the row reads:
-
-```
-Session-level advisory locks    |  Yes  |  Never
-```
-
-The word *session-level* is deliberate: transaction-scoped advisory locks
-are not listed as broken.
-
-**And the failure is worse than "the lock leaks", which is what everyone
-assumes.** Reproduced end to end:
-
-1. Client A takes `pg_advisory_lock(7777)` through transaction-mode PgBouncer, then disconnects
-2. The lock stays held on backend pid 93
-3. Client B lands on **that same backend** and calls `pg_try_advisory_lock(7777)`
-4. It returns **`true`** — because session locks are stackable and the backend already holds it
-
-Mutual exclusion is silently violated. **No error. No log line.** And clients
-that land on a *different* backend hang instead — the same bug presenting as
-the opposite symptom, which is why it's so hard to diagnose from a ticket.
-
-**The config trap that hides it:** `server_reset_query` still *reads* as
-`DISCARD ALL` via `SHOW CONFIG` in transaction mode — it just never runs.
-Auditing the config tells you you're safe when you aren't.
-
-### 3.4a You do not need PgBouncer to have this bug ★
-
-Found while building the demos, and it's the version that will land hardest
-with a .NET room: **Npgsql's own client-side pool does the same thing**, and
-it is on by default.
+`10-efcore-pooling.cs`. No PgBouncer, no exotic configuration: EF Core on
+Npgsql's pool, which is on by default.
 
 ```
-request 1: took a SESSION lock on 44
-request 1: connection disposed ("finished")
-   advisory locks still on the server: 1
-request 2: pg_try_advisory_lock(44) -> TRUE
-           it was TOLD it acquired the lock. Request 1 still holds it.
+request 1: took pg_advisory_lock(101)
+           connection state right after: Closed      <-- already back in the pool
+request 1: DbContext disposed
+   server still holds it: 1
+request 2: pg_try_advisory_lock(101) -> TRUE
+           ^ two requests, same lock, both told they hold it.
 ```
 
-`Dispose()` returns the connection to the pool rather than closing it, so the
-session lock survives. The next request gets that same physical connection,
-re-acquires the same key, and succeeds — because session advisory locks are
-*stackable within a session*.
+**The detail that makes this worse than it looks:** EF Core closes the
+connection *immediately after the statement*. You don't have to reach the end
+of the request or dispose the `DbContext` — a single `ExecuteSqlRaw` is enough
+to hand a lock-holding connection back to the pool.
 
-Two unrelated requests both believe they hold the same lock. One machine, no
-PgBouncer anywhere, default settings. That is `04-pg-advisory.cs`, scenario 3.
+Explicitly opening the connection doesn't save you (scenario 2) — it changes
+*when* it leaks, not *whether*.
 
-Not everyone in the room runs PgBouncer. Everyone runs a connection pool.
+Scenario 3 is the fix: `pg_advisory_xact_lock` inside an explicit
+`BeginTransactionAsync()` → released on commit, every time.
+
+**The rule, in one line:**
+
+> `pg_advisory_xact_lock` inside an explicit transaction. Never
+> `pg_advisory_lock`.
+
+A session-scoped advisory lock is bound to the **connection**. Your
+`DbContext` is scoped to a request; the connection underneath it is not.
+
+> **If you ever adopt PgBouncer**, the same bug exists one layer lower and is
+> harder to see — its own feature matrix lists `Session-level advisory locks |
+> Yes | Never`, and `server_reset_query` still *reads* as `DISCARD ALL` via
+> `SHOW CONFIG` in transaction mode while never running. Details in
+> [`research/02`](research/02-pg-advisory-locks-and-pgbouncer.md). Not
+> presented — we don't run it.
 
 ### 3.4b Make the locks visible
 
@@ -645,7 +633,7 @@ existing repo stays as-is (it still works); this becomes the new demo set.
 
 ```
 01-locking/demos/
-  apphost.cs           Aspire AppHost — Postgres + PgBouncer + Redis
+  apphost.cs           Aspire AppHost — Postgres + Redis
   01-counter.cs        race → Interlocked → lock          §1
   02-async-lock.cs     lock+await won't compile; SemaphoreSlim traps  §1
   03-mutex-a.cs        named Mutex, holder                §1b
@@ -653,7 +641,7 @@ existing repo stays as-is (it still works); this becomes the new demo set.
   03-mutex-scope.sh    driver: 4 scenarios, session + container       §1b
   connection.cs        shared connection strings (#:include)
   04-pg-advisory.cs    session vs xact; pg_locks visibility           §3.3
-  04b-pgbouncer-leak.cs  two clients, one backend, both "hold" the lock  §3.4
+  10-efcore-pooling.cs EF Core leaks a session advisory lock       §3.4
   05-pg-skip-locked.cs FOR UPDATE SKIP LOCKED as a queue  §3.2
   06-redis-lock.cs     SET NX PX + Lua unlock; --naive shows the DEL bug  §4
   07-expiry.cs         sleep past the TTL → two holders → corruption  §4
@@ -665,7 +653,7 @@ point is two OS processes.
 ### How they run on stage
 
 ```sh
-aspire run                    # once, up front — PG + PgBouncer + Redis
+aspire run                    # once, up front — Postgres + Redis
 dotnet run 01-counter.cs      # then one of these per section
 dotnet run 06-redis-lock.cs --naive
 ```
@@ -682,11 +670,10 @@ stage setup.)*
 
 ### The two to build first
 
-`04b-pgbouncer-leak.cs` — because it's the finding the room will least
-expect, and it needs PgBouncer in *transaction* pooling mode in the AppHost
-to reproduce. Pin the pool to a single backend so both clients land on it
-deterministically; otherwise the demo shows the hang instead of the silent
-violation, and the hang is the less interesting half.
+`10-efcore-pooling.cs` — because it's the finding the room will least expect
+and it's their own stack. No PgBouncer, no special configuration: EF Core on
+Npgsql's default pool. Set `Maximum Pool Size=1` so the second request
+deterministically draws the same connection.
 
 `07-expiry.cs` — same shape as `01-counter.cs`, a shared counter and a race,
 except the race is now *across the TTL boundary*. The lock is held, correctly,
