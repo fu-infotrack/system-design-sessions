@@ -29,6 +29,7 @@ page. Idempotency is deferred to session 3, which teaches it properly.
 - **[FRAMEWORK.md](01-locking/FRAMEWORK.md)** — **start here.** The map, the eight
   questions, the decision tree, the anti-patterns. This is the thing to bookmark.
 - **[TALK.md](01-locking/TALK.md)** — 25-minute run sheet: three demos up the scope ladder, then the framework
+- **[slides/](01-locking/slides/)** — the deck. Self-contained HTML, no build, speaker notes on `n`
 - **[NOTES.md](01-locking/NOTES.md)** — the deep version, all mechanisms, ~80 min of material
 - **[demos/](01-locking/demos/)** — eleven file-based scripts, all verified running
 - **[research/](01-locking/research/)** — primary-source notes behind every claim

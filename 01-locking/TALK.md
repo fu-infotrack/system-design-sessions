@@ -9,6 +9,11 @@ at the bottom for how they still get covered.
 **Shape:** three demos that climb the scope ladder — one machine, one
 database, the fleet — each one breaking an assumption. Then the framework.
 
+> **Slides:** [`slides/`](slides/) — 23 slides, self-contained, arrow keys and
+> `n` for speaker notes. See [`slides/PRESENTING.md`](slides/PRESENTING.md).
+> Slides 5, 8 and 11 are demo title cards: they put the command up, then you
+> switch to a terminal.
+>
 > Deep material, all mechanisms: [`NOTES.md`](NOTES.md).
 
 ---

@@ -43,6 +43,7 @@ The four document types are not drafts of each other. They have distinct jobs:
 | `NN-topic/TALK.md` | A timed run sheet for presenting — timings, what's on screen, what to say, a cut list | The *presentation* changes |
 | `NN-topic/NOTES.md` | Deep source material, all mechanisms, far more than fits the talk | You have depth that doesn't fit the run sheet |
 | `NN-topic/research/*.md` | Primary-source findings, one file per question, with a Sources section | New research lands |
+| `NN-topic/slides/` | The deck presented from. Self-contained HTML, no build step | The talk's structure changes |
 
 `FRAMEWORK.md` is the primary artifact. `TALK.md` teaches it. `NOTES.md` is
 where detail goes that the talk can't hold. Research files are inputs to all
