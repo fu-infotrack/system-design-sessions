@@ -60,10 +60,15 @@ that separates "safe" from "safe as long as nothing pauses."
 | Mechanism | Scope | The gotcha |
 |---|---|---|
 | named `Mutex` (Unix) | **POSIX session**, not the machine | Unprefixed names are scoped to `getsid`. Use a `Global`-prefixed name or your single-instance guard silently fails across systemd units and SSH sessions |
-| named `Mutex` (Windows) | **Terminal Services session** | Unprefixed means `Local\`. A service runs in session 0 and a desktop app in session 1+, so they don't contend. `Global\` generally needs `SeCreateGlobalPrivilege` |
+| named `Mutex` (Windows) | **Terminal Services session** | Unprefixed means `Local\`. A service runs in session 0 and a desktop app in session 1+, so they don't contend. `Global\` needs no special privilege for a mutex — that requirement covers file-mapping and symbolic-link objects only |
 | named `Mutex` (WSL ↔ Windows) | **nothing is shared** | Different implementations entirely. `Global\` does not help. "Works on my machine" in WSL says nothing about deployed Windows behaviour |
 
 ### Database
+
+**"Fences?" has three answers, and the difference decides whether you are
+safe.** *No* — nothing rejects a stale writer. *Token only* — you are handed a
+monotonic number, but nothing checks it until **you** wire the resource to.
+*Service-enforced* — the resource refuses the stale write with no work from you.
 
 | Mechanism | Releases on crash | Fences? | The gotcha |
 |---|---|---|---|
@@ -71,8 +76,8 @@ that separates "safe" from "safe as long as nothing pauses."
 | `FOR UPDATE SKIP LOCKED` | yes | yes | It's a work queue, not a mutex — that's the point |
 | `pg_advisory_xact_lock` | yes — commit/rollback | no | `hashtext()` returns `integer`, so the common idiom has ~2³² keys, not 2⁶⁴ |
 | `pg_advisory_lock` | on disconnect only | no | Correct on a **dedicated** connection (leader election); **leaks through any pool**. Under EF Core the connection closes right after the statement, so one `ExecuteSqlRaw` is enough |
-| Optimistic concurrency | n/a | **yes** | Retry storms under high contention |
-| Unique index / `ON CONFLICT` | n/a | **yes** | Free, and usually the right answer to "only once" |
+| Optimistic concurrency | n/a | **service-enforced** | The row itself checks the version. Retry storms under high contention |
+| Unique index / `ON CONFLICT` | n/a | **service-enforced** | Free, and usually the right answer to "only once" |
 
 ### Across machines
 
@@ -80,10 +85,10 @@ that separates "safe" from "safe as long as nothing pauses."
 |---|---|---|---|
 | Redis `SET NX PX` | TTL | no | Unlock must be compare-and-delete; expires mid-work |
 | Redlock | TTL | no | Contested; see §4 of the talk. Complexity for a safety property it doesn't fully deliver |
-| etcd / ZooKeeper lease | session expiry — 20 s default | **yes** (revision/zxid) | Real answer, real ops cost. Best loss detection of any provider |
-| MongoDB (via `DistributedLock`) | TTL — 30 s | **yes** — exposes `FencingToken` | The only TTL provider that can be made genuinely safe |
-| Azure Blob lease | 15–60 s or infinite | **that blob only** | `DistributedLock.Azure` leases a *sentinel* blob by default — mutual exclusion without the fencing. `Duration(-1)` means a dead holder never releases |
-| Idempotency key | n/a | **yes** | Needs a dedupe store — and is stronger than any lock |
+| etcd / ZooKeeper lease | session expiry — 20 s default | **token only** (revision/zxid) | Best loss detection of any provider — but the revision fences nothing until *you* make the resource check it |
+| MongoDB (via `DistributedLock`) | TTL — 30 s | **token only** — exposes `FencingToken` | The only TTL provider that *can* be made safe — the token is handed to you, checking it is your job |
+| Azure Blob lease | 15–60 s or infinite | **service-enforced**, that blob only | `DistributedLock.Azure` leases a *sentinel* blob by default — mutual exclusion without the fencing. `Duration(-1)` means a dead holder never releases |
+| Idempotency key | n/a | **service-enforced** by the far side | Needs a dedupe store — and is stronger than any lock |
 
 ---
 
@@ -103,7 +108,15 @@ This is the fork everything else hangs off.
 - **Efficiency** — you pay twice, waste CPU, send a duplicate log line. A
   sloppy lock is fine.
 - **Correctness** — data is corrupted, a customer is charged twice, a
-  document is overwritten. **A lock alone is never sufficient here.**
+  document is overwritten.
+
+  Be precise about what is and isn't enough here, because "a lock is never
+  enough" is too strong: an **in-process** lock genuinely does protect an
+  in-memory invariant, and a **row lock inside the transaction that does the
+  write** is sufficient too, because the lock and the write commit together.
+  What is never sufficient on its own is an **unfenced lease** — a lock in one
+  system guarding a resource in another — or **any lock at all** once the
+  effect leaves your store.
 
 > ### Three ways a lock goes stale
 >
@@ -133,11 +146,16 @@ This is the fork everything else hangs off.
 > before step 6 — reach for the database you already have before the Redis
 > you'd have to add.
 
-**3. Where does the side effect land — inside or outside the store?**
+**3. Where does the side effect land, and is it safe to repeat?**
 If the protected action reaches outside your transactional store — a payment
-API, an email, a partner call, a file — then no lock can prevent duplicates,
-because the lock and the side effect can't commit atomically. You need
-idempotency.
+API, an email, a partner call — then no lock can prevent duplicates, because the
+lock and the side effect can't commit atomically. You need idempotency.
+
+**Both halves matter.** An external effect that is *safe to repeat* does not
+need this branch: rebuilding a search index writes the same bytes twice, so a
+double-run costs money, not correctness, and it belongs at question 2's
+efficiency column instead. The question is not "does it leave the store" but
+"does it leave the store *and* would repeating it do harm".
 
 **4. What's the blast radius?**
 Threads in one process? Processes on one machine? Processes across a fleet?
@@ -244,7 +262,7 @@ conditioning the write on a token the resource checks — which is steps 2 and 7
 flowchart TD
     A["Name the invariant"] --> B{"<b>1.</b> Can the data store<br/>enforce it directly?"}
     B -->|yes| B1["unique index / EXCLUDE<br/>optimistic concurrency<br/><b>NO LOCK</b>"]
-    B -->|no| C{"<b>2.</b> Does the side effect<br/>land OUTSIDE the store?"}
+    B -->|no| C{"<b>2.</b> Effect leaves the store<br/>AND unsafe to repeat?"}
     C -->|yes| C1["<b>IDEMPOTENCY KEY</b><br/>a lock cannot fix this<br/>add a lock only to reduce waste"]
     C -->|no| D{"<b>3.</b> Can contention be made<br/>structurally impossible?"}
     D -->|yes| D1["partition by key / single writer<br/><b>NO LOCK</b>"]
@@ -273,7 +291,7 @@ you back, it is sending you to one of these three:
 | | Question | If yes |
 |---|---|---|
 | **1** | Can the data store enforce the invariant itself? | unique index, `EXCLUDE`, optimistic concurrency |
-| **2** | Does the side effect land outside the store? | idempotency key |
+| **2** | Does the effect leave the store *and* is it unsafe to repeat? | idempotency key |
 | **3** | Can contention be made structurally impossible? | partition by key, actor/grain, single writer — [see below](#step-3-in-practice--making-contention-impossible) |
 
 ### The same tree, as text
@@ -288,7 +306,8 @@ you back, it is sending you to one of these three:
       append-only ............... just append
     YES -> no lock. Done.
 
-2.  Does the protected side effect land outside the store?
+2.  Does the protected side effect leave the store AND is it unsafe to
+    repeat?  (a deterministic overwrite is safe to repeat -> fall through)
     (payment, email, partner API, file, published message)
     YES -> you need IDEMPOTENCY, not mutual exclusion.
            A lock reduces duplicates; it cannot prevent them.
@@ -733,9 +752,17 @@ What to do instead — and this is the dead-end being productive:
 2. If they won't, build the dedupe yourself: record the intent in your database
    first, with a unique constraint on a business key, and only send if the
    insert won. You've converted an unfenceable external effect into step 1 plus
-   step 2. It is not perfect — you can still send twice if you crash between
-   insert and send — but it turns silent duplication into a detectable,
-   reconcilable gap, which is what "safe" means in practice.
+   step 2.
+
+   Be honest about the crash window, because the two designs fail in opposite
+   directions. **Insert-then-send** (insert the row, send only if you won) can
+   *omit* the send: crash after the insert and a retry finds the row, concludes
+   someone else sent it, and never sends. Nothing is duplicated; something is
+   silently missing. **Insert-pending, send, mark-sent** can *duplicate*: crash
+   after the send but before marking, and the retry cannot tell whether the send
+   landed. Pick the failure you would rather reconcile — an omission you can
+   detect by sweeping for stale `pending` rows, or a duplicate the far side
+   must tolerate. Neither is exactly-once, and no lock improves either.
 
 ---
 
@@ -1099,11 +1126,21 @@ are locks only. `.WaitHandles` is Windows only.
 might have written off is the one that can actually be made safe, if your
 resource checks it. That's step 7 of the tree, available off the shelf.
 
-**2. Redis's loss detector is defeated by the thing it detects.** It fires
-when an extend fails, or when 30 s elapse with no successful extend — but that
-elapsed time is measured on a **local `Stopwatch` that the same pause
-freezes**. A GC pause that costs you the lock also stops the clock that would
-have told you.
+**2. Redis's loss detector reports late, not never.** It fires when an extend
+fails, or when 30 s elapse with no successful extend. A stop-the-world pause
+suspends the renewal task, so no extend is attempted while you are frozen — but
+`Stopwatch` is backed by the OS monotonic clock, which keeps counting. On
+resumption the elapsed time is observed correctly and the handle is signalled
+lost.
+
+So the token does fire; the problem is *when*. The signal cannot arrive during
+the pause, which is exactly the window in which another client took the lock and
+your next write is already unsafe. **A late loss signal does not prevent the
+overlap, it only tells you afterwards.**
+
+*(Derived from reading the implementation. Behaviour under a real induced GC
+pause is not measured — see the open items in
+[`research/10`](research/10-distributedlock-provider-expiry.md).)*
 
 **3. `Azure` with `Duration(-1)` inverts the failure mode.** An infinite lease
 means the renewal loop never runs, so the token never fires and a **dead

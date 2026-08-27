@@ -58,6 +58,12 @@ the moment an effect leaves your process.</p>
   </tbody>
 </table>
 
+<p><strong>One qualifier</strong>, or the right-hand column swallows too much: an
+external effect that is <em>safe to repeat</em> does not need idempotency.
+Rebuilding a search index writes the same bytes twice — a double-run costs money,
+not correctness. The test is not "does it leave my store" but <strong>"does it
+leave my store <em>and</em> would repeating it do harm"</strong>.</p>
+
 <p>Inside your store you have a real option, because the lock and the write can
 commit or roll back together — that is why <code>SELECT … FOR UPDATE</code> in
 one transaction is stronger than any Redis lease. Outside, you need the
@@ -147,7 +153,7 @@ Quiz.choice({
         'Wrap the call in a serializable transaction so it cannot interleave'
       ],
       answer: 'Record the intent behind a unique constraint, then send if you won',
-      why: 'The first two make the lock stronger, which was never the failing part. The fourth cannot help because the API call is not part of your transaction. The third converts an unfenceable effect into a database race you CAN win — and though a crash between insert and send can still double-send, it turns silent duplication into a detectable, reconcilable gap. That is what safe means here.' }
+      why: 'The first two make the lock stronger, which was never the failing part. The fourth cannot help because the API call is not part of your transaction. The third converts an unfenceable effect into a database race you CAN win. Be precise about its crash window though: insert-then-send can OMIT the send (crash after the insert, and a retry sees the row and assumes it was sent) — it does not duplicate. Duplication needs the other shape: insert-pending, send, mark-sent, where a crash after sending loses the acknowledgement. Neither is exactly-once; you are choosing which failure to reconcile.' }
   ]
 });
 </script>

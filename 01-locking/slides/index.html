@@ -196,7 +196,7 @@ lost updates:     <span class="bad">4</span></pre>
   <ol>
     <li>What <span class="accent">invariant</span> am I protecting?</li>
     <li>What does a <span class="accent">double-run cost</span>?</li>
-    <li>Where does the <span class="accent">side effect</span> land?</li>
+    <li>Where does the <span class="accent">side effect</span> land — and is it safe to repeat?</li>
     <li>What's the <span class="accent">blast radius</span>?</li>
   </ol>
 </section>
@@ -217,7 +217,7 @@ lost updates:     <span class="bad">4</span></pre>
 <section class="slide" data-notes="Walk it top-down, out loud. Tie steps 4, 5 and 6 back to the three demos BY NAME — they were the evidence for exactly those rows.">
   <p class="kicker">The tree</p>
   <pre>1. Can the data store enforce it?          -> no lock
-2. Side effect outside the store?          -> idempotency
+2. Leaves store, unsafe to repeat?         -> idempotency
 3. Contention structurally avoidable?      -> no lock
 <span class="dim">──────────────────────────────────────────────────</span>
 4. Blast radius?                           <span class="dim">[demo 1]</span>
@@ -250,7 +250,7 @@ lost updates:     <span class="bad">4</span></pre>
   <ol>
     <li><b>Name the invariant.</b> If you can't, you don't need a lock — you need to think harder.</li>
     <li><b>Distributed locks expire while you hold them.</b> Design for it, or don't use one.</li>
-    <li><b>If the side effect leaves your process,</b> you need idempotency, not mutual exclusion.</li>
+    <li><b>If the side effect leaves your process and cannot be safely repeated,</b> you need idempotency, not mutual exclusion.</li>
   </ol>
 </section>
 

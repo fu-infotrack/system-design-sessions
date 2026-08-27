@@ -224,7 +224,8 @@ Windows **service runs in session 0** and an interactive user in session 1+.
 So a service and a desktop app using the same unprefixed name **do not
 contend** — structurally the identical bug to the Unix one, for a completely
 different reason. Creating a `Global\` object on Windows also generally needs
-`SeCreateGlobalPrivilege`.
+no special privilege — the `SeCreateGlobalPrivilege` requirement covers
+file-mapping and symbolic-link objects only, not mutexes.
 
 ### And the one that will actually bite this team
 

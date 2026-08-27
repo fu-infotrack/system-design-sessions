@@ -33,8 +33,8 @@
   <span class="a">unique index · partial unique index · <code>EXCLUDE</code> · optimistic concurrency → <strong>no lock</strong></span></span></div>
 
 <div class="step exit"><span class="n">2</span><span>
-  <span class="q">Does the side effect land outside the store?</span><br>
-  <span class="a">payment, email, partner API → <strong>idempotency key</strong>. A lock cannot fix this</span></span></div>
+  <span class="q">Does the effect leave the store, and is it unsafe to repeat?</span><br>
+  <span class="a">payment, email, partner API → <strong>idempotency key</strong>. A lock cannot fix this. A deterministic overwrite is safe to repeat — fall through</span></span></div>
 
 <div class="step exit"><span class="n">3</span><span>
   <span class="q">Can contention be made structurally impossible?</span><br>
@@ -64,7 +64,7 @@
   <ol>
     <li>What invariant am I protecting?</li>
     <li>What does a double-run cost?</li>
-    <li>Where does the side effect land?</li>
+    <li>Effect outside the store, unsafe to repeat?</li>
     <li>What is the blast radius?</li>
   </ol>
 </div>
