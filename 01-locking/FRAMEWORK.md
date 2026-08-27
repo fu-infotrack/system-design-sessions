@@ -17,6 +17,21 @@ The single most useful idea here:
 
 ---
 
+## Terms used throughout
+
+Six words this document leans on. Everything else is defined where it appears.
+
+| | |
+|---|---|
+| **Mutual exclusion** | the guarantee that at most one holder exists at a time. What every lock promises — and, past a certain scope, delivers only conditionally |
+| **TTL** | time-to-live: the expiry a lock is given so a dead holder can't keep it forever. The price is that a *live* holder can outlive it |
+| **Lease** | any grant that expires on a clock — a TTL lock, a Service Bus message lock, Kafka partition ownership |
+| **Idempotency key** | a caller-chosen id for one logical operation. The far side stores key → result and replays the stored result on a retry instead of re-executing |
+| **Fencing token** | a monotonically increasing number issued with a lock, which the *resource* checks so stale writers are refused (defined fully at step 7) |
+| **Zombie** | a holder whose lease has expired but which is still working — it believes it holds the lock, and nothing has told it otherwise |
+
+---
+
 ## Part 1 — The map
 
 What exists, and what it actually promises. **"Fences?" means: does the
@@ -377,8 +392,9 @@ five minutes of human thinking is indefensible.
 pods does not help, and this is the important intuition: **the lock and the
 charge cannot commit together.** Whatever order you choose, there's an instant
 where one happened and the other didn't. So you can't get exactly-once out of
-mutual exclusion — you get it by making the *operation* idempotent, with a key
-the payment provider deduplicates on.
+mutual exclusion — you get it by making the *operation* idempotent: send a key
+that names this one logical charge, and the provider stores key → result and
+replays the stored result on a retry instead of charging again.
 
 You might still take a lock here, to avoid burning two API calls. That's an
 efficiency lock, and it should say so in a comment.
@@ -639,6 +655,10 @@ antirez's sharpest counter, and the honest limit of the idea:
 > If your resource can reject a stale fencing token, your resource is already a
 > linearizable store — and if you had one of those, why did you need a strong
 > distributed lock in the first place?
+
+(*Linearizable*: every operation appears to take effect atomically at a single
+point in time between call and response — the strongest consistency a store can
+offer, and the property a fencing check quietly requires.)
 
 That is why step 7 dead-ends where it does. No fencing available means no lock
 makes it correct, so the answer is to change the design.
@@ -990,7 +1010,7 @@ the same — you must write the conflict path and mean it.
 | 3 | **Idempotency keys** | step 2 | The side effect is **external** — charge, email, partner API — and callers retry. Strictly stronger than a lock here. | Purely internal state; constraints or OCC are cheaper. |
 | 4 | **Single-writer / partitioning** | step 3 | Work is naturally keyed (per-account, per-order, per-tenant) and you control routing. Pair with offset-conditioned writes. | Key unknown until mid-operation; work spans keys; hot keys become throughput ceilings. You need correctness across a rebalance without an idempotency story. |
 | 5 | **Lock-free in-process** — `Interlocked`, immutable | step 4a | One process, tiny critical section, contended counter or reference swap. | The critical section does I/O or spans more than one memory location. |
-| 6 | **Serializable isolation (PG SSI)** | step 5 | The invariant spans multiple rows, or rows that *don't exist yet* — phantoms, "sum of balances", "no more than N". | You can't add a retry loop; high-conflict or long transactions. |
+| 6 | **Serializable isolation (PG SSI)** | step 5 | The invariant spans multiple rows, or rows that *don't exist yet* — phantoms (rows another transaction inserts under you), "sum of balances", "no more than N". SSI = Serializable Snapshot Isolation, Postgres's detect-and-abort implementation. | You can't add a retry loop; high-conflict or long transactions. |
 | 7 | **Append-only / event sourcing** | step 1 | Writes are naturally facts, not overwrites; you need an audit trail. | You mostly need current-state reads; team hasn't done it before. |
 | 8 | **Outbox** | step 2 | Write to the DB **and** publish a message, atomically, without a distributed transaction. | Only one system is written; the message must be visible with zero delay. |
 | 9 | **Leader election / leases** | step 6 | *"Only one instance should run this cron."* The most common real distributed-lock use. On Postgres, an advisory lock on a **dedicated** connection is a strong option — see below. | You need correctness-grade exclusion — see the warning below. |
