@@ -92,6 +92,9 @@
     <tr><td>A lock around a payment</td><td>an idempotency key</td></tr>
     <tr><td>A TTL lock guarding correctness</td><td>fencing, or restructure</td></tr>
     <tr><td>Unprefixed named <code>Mutex</code></td><td><code>Global</code>-prefixed name</td></tr>
+    <tr><td>Tx-scoped lock held across an HTTP call</td><td>move the call out — it was a step 2 problem</td></tr>
+    <tr><td>A behaviour opening a tx around every handler</td><td>handle transactions where the SQL is</td></tr>
+    <tr><td><code>statement_timeout</code> as your only PG guard</td><td>also <code>idle_in_transaction_session_timeout</code></td></tr>
     <tr><td>A lock with no metric</td><td>count contention, timeouts, lock-lost</td></tr>
   </tbody>
 </table>

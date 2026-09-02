@@ -169,6 +169,14 @@ Milliseconds inside a transaction → a database lock. Minutes → you need a
 lease with renewal, and you should ask whether the work can be broken up
 instead.
 
+**A transaction-scoped lock makes this question load-bearing**, because the
+answer is also how long your *transaction* stays open. `pg_advisory_xact_lock`
+and `sp_getapplock @LockOwner='Transaction'` are step 5's recommendation
+precisely because the lock and the write commit together — which means holding
+the lock *is* holding a transaction. Put a network call inside and you have a
+transaction spanning something you don't control. See
+[the long-transaction trap](#the-transaction-scoped-lock-that-became-a-long-transaction).
+
 **6. What's the contention?**
 Low → optimistic concurrency wins; retries are rare and there's no waiting.
 High → locking or queueing wins; optimistic retry turns into a livelock.
@@ -462,6 +470,99 @@ Three different answers depending on what you're locking:
 This branch is where most distributed-lock questions should land, and usually
 the reason they don't is that nobody realised the database was already
 sufficient.
+
+### The transaction-scoped lock that became a long transaction
+
+The most common way step 5 goes wrong in production, and worth its own section
+because the framework's own advice leads you into it.
+
+**The shape.** A pipeline behaviour or decorator — MediatR `IPipelineBehavior`,
+an interceptor, a `[Transactional]` attribute — opens a transaction around the
+whole handler:
+
+```csharp
+await using var tx = await db.Database.BeginTransactionAsync(ct);
+var response = await next();      // <-- the entire handler runs in here
+await tx.CommitAsync(ct);
+```
+
+Nothing about that is wrong on its own. It becomes wrong when a handler inside
+`next()` calls an HTTP API, a broker, a cache, or another database — because the
+transaction now spans a network call you do not control. If the downstream hangs,
+your transaction stays open for as long as the timeout allows, or forever if
+there isn't one.
+
+**Why the framework leads you here.** Step 5 recommends a transaction-scoped
+lock *because* the lock and the write commit together — no TTL, no clock. But
+that guarantee is purchased by tying the lock's lifetime to a transaction. So
+"hold the lock across this work" silently becomes "hold a transaction across
+this work."
+
+> **The diagnosis: this is step 5's answer applied to a step 2 problem.**
+> Wanting to hold a lock across an external call *is* step 2 — and step 2's
+> answer is idempotency, not a lock. The trap is only reachable by skipping it.
+
+#### What it costs, by engine
+
+| | SQL Server | PostgreSQL |
+|---|---|---|
+| Primary damage | log cannot truncate (`log_reuse_wait_desc = ACTIVE_TRANSACTION`) → log grows → error 9002 | **`VACUUM` cannot remove dead tuples** → table and index bloat |
+| Preconditional? | the *version store* half needs RCSI or snapshot isolation | **no — MVCC is always on, at every isolation level** |
+| Blast radius | that database's log | **the whole database** — the held-back xmin horizon blocks cleanup on tables you never touched |
+| Extreme case | log fills the disk | **XID wraparound**: at 40M transactions PG warns, at 3M it refuses to assign new XIDs and only read-only transactions can start |
+| Recovery | end the transaction and the log truncates | **end the transaction and the bloat remains** — plain `VACUUM` marks space reusable but *"will not return the space to the operating system"* |
+
+That last row is the one to remember: **on Postgres the damage outlives the
+transaction.** Reclaiming it needs `VACUUM FULL` or `pg_repack`.
+
+Two further notes. Under SQL Server **FULL recovery**, truncation needs a log
+backup *as well as* no active transaction, so a stuck transaction plus a missed
+backup is a much shorter path to 9002 than either alone. And on Postgres, with
+`hot_standby_feedback = on`, a long transaction **on a replica** holds back the
+primary's xmin — a slow report on a read replica can bloat the write primary.
+
+#### The Postgres defaults that will not save you
+
+All four relevant timeouts default to **zero, disabled**:
+
+| Setting | Default | Covers idle *inside* a transaction? |
+|---|---|---|
+| `statement_timeout` | 0 | **no** — measured per command, from arrival to completion |
+| `idle_in_transaction_session_timeout` | 0 | **yes** — this is the one you want |
+| `transaction_timeout` (PG 17+) | 0 | yes, total transaction duration |
+| `idle_session_timeout` | 0 | no — explicitly excludes open transactions |
+
+A handler awaiting an HTTP response is **idle in transaction**: no statement is
+running, so `statement_timeout` never fires. Teams that set `statement_timeout`
+and consider themselves covered are not.
+
+Set `idle_in_transaction_session_timeout`, and on PG 17+ add
+`transaction_timeout` as a backstop — noting the documented interaction, that a
+`transaction_timeout` shorter than or equal to the others causes the longer one
+to be ignored.
+
+#### The fixes, in order
+
+1. **Move external I/O out of the critical section.** If it can be done before
+   the transaction opens or after it commits, do that. Publishing events *after*
+   commit is the common correct version of this.
+2. **Scope the behaviour to commands**, not every request. A read query does not
+   need a write transaction — and note that even a `SELECT`-only transaction can
+   fill tempdb, because internal objects for sorts and hashes are created under
+   it.
+3. **Prefer optimistic concurrency to a lock.** A `rowversion` or version column
+   gives the same protection with *zero* transaction duration — no lock to hold
+   and no transaction to leave open.
+4. **Use an idempotency key for the external effect.** That was step 2's answer
+   before any of this started.
+5. **Alert on the symptom, not the code.** `log_reuse_wait_desc =
+   'ACTIVE_TRANSACTION'` on SQL Server; oldest `xact_start` in
+   `pg_stat_activity` where `state = 'idle in transaction'` on Postgres. Neither
+   shows up as a slow query, which is why this reaches production.
+
+*Sources: SQL Server transaction log truncation and row-versioning guides;
+PostgreSQL routine vacuuming and client connection defaults. Verified against
+primary docs.*
 
 ### 6 · Efficiency, not correctness
 
@@ -1214,6 +1315,9 @@ may be unachievable. Same conclusion as step 7.
 | A distributed lock around a payment | Cannot be atomic with the side effect | Idempotency key |
 | A lock with a TTL guarding "correctness" | The TTL will expire mid-work | Fencing, or restructure |
 | Unprefixed named `Mutex` as a single-instance guard | Scoped to the POSIX session on Unix | `Global`-prefixed name |
+| A transaction-scoped lock held across an HTTP call | The transaction spans a network call you don't control | Move the call out, or use idempotency — it was a step 2 problem |
+| A pipeline behaviour opening a transaction around every handler | Makes the transaction boundary invisible and maximal; wraps read queries too | Handle transactions where the SQL is; scope to commands |
+| `statement_timeout` as your only Postgres guard | Doesn't cover idle-in-transaction, which is exactly this failure | Also set `idle_in_transaction_session_timeout` |
 | A lock with no metric | Locks fail silently | Count contention, timeouts, and lock-lost events |
 
 ---
