@@ -46,16 +46,21 @@ want 2 && run_case "2. Different POSIX sessions, Global\\ prefix"  'Global\OneTr
 want 3 && run_case "3. Container sharing /tmp, UNPREFIXED name"   'OneTrueLock'        docker
 want 4 && run_case "4. Container sharing /tmp, Global\\ prefix"    'Global\OneTrueLock' docker
 
+echo
+echo "=============================================================="
+echo " What just happened"
+echo "=============================================================="
+echo
+echo "  scenario                              unprefixed    Global\\"
+echo "  ------------------------------------  -----------   ---------"
+want 1 && want 2 && echo "  different POSIX session               ACQUIRED      BLOCKED"
+{ want 1 && ! want 2; } && echo "  different POSIX session, unprefixed   ACQUIRED      (not run)"
+{ want 2 && ! want 1; } && echo "  different POSIX session, Global\\      (not run)     BLOCKED"
+want 3 && want 4 && echo "  container sharing /tmp                ACQUIRED      BLOCKED"
+{ want 3 && ! want 4; } && echo "  container sharing /tmp, unprefixed    ACQUIRED      (not run)"
+{ want 4 && ! want 3; } && echo "  container sharing /tmp, Global\\       (not run)     BLOCKED"
+
 cat <<'EOF'
-
-==============================================================
- What just happened
-==============================================================
-
-  scenario                              unprefixed    Global\
-  ------------------------------------  -----------   ---------
-  different POSIX session               ACQUIRED      BLOCKED
-  container sharing /tmp                ACQUIRED      BLOCKED
 
 On Unix, .NET backs named mutexes with FILES:
 
@@ -68,24 +73,42 @@ different sessions, no mutual exclusion, no error.
 
 Every "only one instance of this app may run" guard built on an
 unprefixed named Mutex is broken in exactly this way, silently.
+EOF
+
+if want 3 || want 4; then
+cat <<'EOF'
 
 And note scenario 3: sharing /tmp is NOT enough on its own. The
 container's PID 1 is session 1, so it looks in session1/ and finds
 nothing. It takes BOTH a shared /tmp and a Global\ name to contend
 across the container boundary.
+EOF
+else
+cat <<'EOF'
+
+Scenarios 3 and 4 (the container boundary) were not run. Re-run as
+./03-mutex-scope.sh 3 4 to see that sharing /tmp is not sufficient on
+its own -- a container's PID 1 is session 1, so it needs BOTH a shared
+/tmp and a Global\ name to contend.
+EOF
+fi
+
+cat <<'EOF'
 
 On WINDOWS the same trap exists by a different mechanism: named mutexes
 are kernel objects, unprefixed means Local\ = per Terminal Services
-session, and a service runs in session 0 while a desktop app runs in
-session 1+. They do not contend.
+session. Microsoft's kernel-object-namespaces doc states that a
+single-instance guard spanning all sessions "must be created or opened
+in the global namespace instead of the per session namespace".
 
-And across the WSL boundary nothing is shared at all -- a Windows process
-and a WSL process never contend on the same name, Global\ included. If you
-develop in WSL and deploy to Windows, "it worked on my machine" tells you
-nothing about the locking behaviour of the deployed thing.
+Note what is and is not verified: Windows<->Windows same-session
+contention and the WSL<->Windows boundary were tested via interop.
+Contention ACROSS Terminal Services sessions (service in session 0 vs a
+desktop app) is what the docs imply -- it is not tested here. See
+../research/07-named-mutex-on-unix.md.
 
-(This script tests the Linux side. The Windows rows were verified
-separately via WSL interop -- see ../NOTES.md.)
+Across the WSL boundary nothing is shared at all -- a Windows process
+and a WSL process never contend on the same name, Global\ included.
 
 The lock's scope is the scope of the thing implementing it.
 EOF

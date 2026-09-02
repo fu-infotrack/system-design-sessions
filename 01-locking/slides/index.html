@@ -175,8 +175,8 @@ request 2: pg_try_advisory_lock(101) -> <span class="bad">TRUE</span>
 <section class="slide" data-notes="Every worker held the lock. Updates were lost anyway, silently. Because a distributed lock needs a TTL — you cannot tell 'dead' from 'slow' — and the moment it has a TTL it can expire while you are still working. A GC pause is enough.">
   <p class="kicker">The reveal</p>
   <pre>expected counter: 8
-actual counter:   <span class="bad">4</span>
-lost updates:     <span class="bad">4</span></pre>
+actual counter:   5      <-- varies per run
+lost updates:     3</pre>
   <h3 style="margin-top:1.4rem">Every worker held the lock.</h3>
   <p class="wide">A lease can expire <span class="accent">while you are still working</span>.
   A GC pause is enough.</p>
@@ -202,13 +202,13 @@ lost updates:     <span class="bad">4</span></pre>
 </section>
 
 <!-- 15 -->
-<section class="slide" data-notes="Question 2 is the fork everything hangs off. Ask the room to place their own work. Efficiency: a sloppy lock is fine. Correctness: a lock alone is NEVER enough — which is what demo 3 just showed.">
+<section class="slide" data-notes="Question 2 is the fork everything hangs off. Ask the room to place their own work. Efficiency: a sloppy lock is fine. Correctness: an UNFENCED LEASE is never enough — which is what demo 3 showed. Be precise if asked: an in-process lock, or a row lock inside the transaction that does the write, IS sufficient.">
   <h3>Question 2 is the fork</h3>
   <table>
     <tr><th></th><th>Efficiency</th><th>Correctness</th></tr>
     <tr><td>A double-run costs</td><td>money</td><td>wrong data</td></tr>
     <tr><td>Sloppy lock OK?</td><td class="good">yes</td><td class="bad">no</td></tr>
-    <tr><td>Is a lock enough?</td><td class="good">yes</td><td class="bad">never, alone</td></tr>
+    <tr><td>Is a lock enough?</td><td class="good">yes</td><td class="bad">not an unfenced lease</td></tr>
   </table>
   <p class="wide dim" style="margin-top:1.6rem">Where does your current work sit?</p>
 </section>
@@ -281,7 +281,7 @@ UPDATE orders SET status = 'paid'
 </section>
 
 <!-- 22 -->
-<section class="slide" data-notes="Close here. Eight things everyone knows about locking, none of which survived checking — including a live documentation bug on Microsoft Learn. This argues for using a checklist better than any assertion could.">
+<section class="slide" data-notes="Close here. A selection of things everyone knows about locking, none of which survived checking — including a live documentation bug on Microsoft Learn. This argues for using a checklist better than any assertion could.">
   <p class="kicker">Closing</p>
   <h3>Things "everyone knows" that aren't true</h3>
   <table>

@@ -64,7 +64,7 @@ already been rejected once.
 cd 01-locking/demos
 
 aspire run                              # Postgres + Redis. ~60s to ready.
-dotnet run 01-counter.cs                # demos 1-3 need no containers
+dotnet run 01-counter.cs                # demos 1-2 need nothing; 03 needs Docker for 3/4
 dotnet run 06-redis-lock.cs -- --naive  # wrong variants live behind flags
 ./03-mutex-scope.sh 1 2                 # takes scenario numbers; all four takes ~2 min
 dotnet publish 03-mutex-b.cs -o out     # file-based apps do publish, used for the container test

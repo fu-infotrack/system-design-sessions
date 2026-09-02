@@ -1,5 +1,21 @@
 # Q10 — DistributedLock (madelson): Release and Expiry Semantics, Provider by Provider
 
+> ### ⚠️ Correction (2026-08-27)
+>
+> This file states in the table below that Redis's loss detector measures
+> elapsed time on a **"local `Stopwatch` that the same pause freezes"**. That is
+> **wrong**. `Stopwatch` is backed by the OS monotonic clock, which keeps
+> counting through a stop-the-world pause; on resumption the elapsed time is
+> observed correctly and the handle is signalled lost.
+>
+> The detector therefore reports **late, not never**. The real problem is *when*:
+> the signal cannot arrive during the pause, which is exactly the window in
+> which another client took the lock and your next write is already unsafe.
+>
+> `FRAMEWORK.md` carries the corrected version. Behaviour under a real induced
+> GC pause remains unmeasured — see the open items at the foot of this file.
+
+
 *Library version audited: **master @ `8007a86`, release 2.8.3 (2026-07-14)**. Every claim about the library below was
 read out of that source tree, not inferred from the docs — where the docs and the source disagree, this file says so.*
 

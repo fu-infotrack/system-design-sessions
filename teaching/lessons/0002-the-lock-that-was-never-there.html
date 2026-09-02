@@ -43,9 +43,11 @@ that catches everyone:</p>
 goes back to the pool still holding your lock, and the next request that draws
 it is <strong>told it acquired the lock too</strong>. Measured:</p>
 
-<pre><code>after request 1 disposed           : 1 lock on server
-after request 2 opened (no cmd yet): 1 lock on server
-request 2 pg_try_advisory_lock     : True     <-- both hold it</code></pre>
+<pre><code>request 1: took pg_advisory_lock(101)
+request 1: DbContext disposed
+   server still holds it: 1
+request 2: opened, no command yet -> server holds: 1
+request 2: pg_try_advisory_lock(101) -> TRUE     <-- both hold it</code></pre>
 
 <p>No exception. No log line. Session-scoped locks are <em>stackable</em>, so
 re-acquiring on a connection that already holds it simply succeeds.</p>
@@ -57,7 +59,8 @@ re-acquiring on a connection that already holds it simply succeeds.</p>
 transaction that begins and ends with that one statement. The lock is taken and
 released in the same breath:</p>
 
-<pre><code>xact_lock, no explicit tx -> locks held after statement: 0</code></pre>
+<pre><code>=== 4. pg_advisory_xact_lock with NO explicit transaction ===
+  xact_lock, no explicit tx -> locks held after statement: 0</code></pre>
 
 <p>You have no lock at all, and nothing tells you. This one is worse than the
 leak, because the leak at least serialises something.</p>
@@ -88,8 +91,10 @@ not the scope of your code. Two questions settle every case:</p>
 <p>And note what the rule is <em>not</em>: session-scoped locks are not a
 mistake. They are exactly right when you want to hold something for the lifetime
 of a <em>process</em> — leader election, a singleton daemon — on a dedicated
-connection you own. <a href="https://martendb.io/events/projections/async-daemon.html">Marten's
-async daemon</a> elects its projection leader this way.</p>
+connection you own — a background service holding one connection for its
+lifetime, never borrowing from the pool that serves requests. (Libraries do this
+too; <a href="https://martendb.io/events/projections/async-daemon.html">Marten's
+async daemon</a> is one example, though we don't run it.)</p>
 
 <div class="source">
   <span class="label">Read this next</span>

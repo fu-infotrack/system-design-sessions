@@ -33,7 +33,7 @@ choosing <em>how</em> to protect it, answer one question:</p>
   <tbody>
     <tr><td>A double-run costs</td><td>money, CPU, duplicated work</td><td>wrong data</td></tr>
     <tr><td>Is a sloppy lock OK?</td><td>yes</td><td><strong>no</strong></td></tr>
-    <tr><td>Is a lock even enough?</td><td>yes</td><td><strong>never, on its own</strong></td></tr>
+    <tr><td>Is a lock even enough?</td><td>yes</td><td><strong>not if it's an unfenced lease</strong></td></tr>
   </tbody>
 </table>
 
@@ -55,7 +55,10 @@ nothing else can release it. And the moment it has a time limit, <strong>it can
 expire while you are still working</strong> — a garbage-collection pause is
 enough. Two processes then hold it, and neither knows.</p>
 
-<p>So in the correctness column, mutual exclusion is not the answer. Something
+<p>So in the correctness column, be precise about what suffices. An in-process
+lock, or a row lock inside the transaction that does the write, <em>is</em>
+enough — the lock and the write commit together. What is never enough on its
+own is a lock in one system guarding a resource in another. There, something
 must reject the stale writer — the database checking a version, or the storage
 service refusing a write without the current lease. We cover that in <a href="0005-every-lease-expires.html">lesson 5</a>.</p>
 
@@ -63,13 +66,13 @@ service refusing a write without the current lease. We cover that in <a href="00
   <span class="label">Watch it happen</span>
   <p>Our demo <code>07-expiry.cs</code> runs a lock exactly by the book —
   <code>SET NX PX</code>, unique token, compare-and-delete unlock — and still
-  loses half its updates, silently.</p>
+  loses updates anyway, silently.</p>
   <pre><code>cd 01-locking/demos &amp;&amp; aspire run
 dotnet run 07-expiry.cs
 
 expected counter: 8
-actual counter:   4
-lost updates:     4</code></pre>
+actual counter:   5      <-- varies per run
+lost updates:     3</code></pre>
 </div>
 
 <h2>The practice</h2>

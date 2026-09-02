@@ -19,7 +19,7 @@ practice — no new material, just whether you can use what you have.</p>
 is the point: most people enter at step 4 and never ask the first three.</p>
 
 <pre><code>1. Can the data store enforce it?          -> no lock          [L3]
-2. Side effect outside the store?          -> idempotency      [L4]
+2. Leaves store, unsafe to repeat?         -> idempotency      [L4]
 3. Contention structurally avoidable?      -> no lock
 4. Blast radius?                           -> picks the family
 5. Is the DB the shared state?             -> FOR UPDATE / xact [L2]
@@ -86,38 +86,50 @@ Quiz.choice({
   prompt: 'Which step resolves each one?',
   items: [
     { text: 'A user must not be able to register the same email address twice.',
-      options: ['1 — the store can enforce it', '2 — the effect leaves the store',
-                '5 — the database is the shared state', '6 — an efficiency lease is fine'],
+      options: ['2 — the effect leaves the store',
+                '5 — the database is the shared state',
+                '1 — the store can enforce it',
+                '6 — an efficiency lease is fine'],
       answer: '1 — the store can enforce it',
       why: 'Uniqueness is a predicate over rows, so a unique index holds it. Two concurrent signups race, one wins, the other gets 23505 and you turn that into "already registered". It binds a migration or a manual insert too, which no lock does.' },
 
     { text: 'A nightly job must run on only one of five identical pods. Running twice wastes CPU but corrupts nothing.',
-      options: ['6 — an efficiency lease is fine', '1 — the store can enforce it',
-                '7 — the resource must fence it', '2 — the effect leaves the store'],
+      options: ['6 — an efficiency lease is fine',
+                '1 — the store can enforce it',
+                '7 — the resource must fence it',
+                '2 — the effect leaves the store'],
       answer: '6 — an efficiency lease is fine',
       why: 'Write down what a double-run costs: money, not correctness. So the cheapest thing that mostly works is right — a Redis SET NX PX with a token and a compare-and-delete unlock, plus a comment saying the lock is approximate.' },
 
     { text: 'A withdrawal must not overdraw an account. The balance is a row in our Postgres database.',
-      options: ['5 — the database is the shared state', '3 — contention is avoidable',
-                '6 — an efficiency lease is fine', '2 — the effect leaves the store'],
+      options: ['3 — contention is avoidable',
+                '6 — an efficiency lease is fine',
+                '2 — the effect leaves the store',
+                '5 — the database is the shared state'],
       answer: '5 — the database is the shared state',
       why: 'SELECT ... FOR UPDATE inside the transaction that does the write, so the lock and the update commit together. No TTL exists, so there is no clock to be wrong — which is why step 5 sits before step 6.' },
 
     { text: 'A settlement instruction goes to a partner API that is not idempotent and offers no version check. Sending twice is unacceptable.',
-      options: ['7 — stop and restructure', '6 — an efficiency lease is fine',
-                '4 — pick a lock by blast radius', '5 — the database is the shared state'],
-      answer: '7 — stop and restructure',
+      options: ['6 — an efficiency lease is fine',
+                '7 — stop, restructure the design',
+                '4 — pick a lock by blast radius',
+                '5 — the database is the shared state'],
+      answer: '7 — stop, restructure the design',
       why: 'Correctness, the effect is external, and the resource cannot reject a stale caller — so no lock makes this safe. Go back to step 1 or 2: record the intent behind a unique constraint and send only if you won. The dead end is the answer, not a failure to find one.' },
 
     { text: 'Ten workers apply a stream of per-order updates arriving from a broker we configure.',
-      options: ['3 — contention is avoidable', '5 — the database is the shared state',
-                '1 — the store can enforce it', '4 — pick a lock by blast radius'],
+      options: ['5 — the database is the shared state',
+                '1 — the store can enforce it',
+                '4 — pick a lock by blast radius',
+                '3 — contention is avoidable'],
       answer: '3 — contention is avoidable',
       why: 'Partition on order id and every update for one order lands on one consumer, so nothing interleaves and no lock is needed. Add an offset-conditioned write to cover the rebalance window — but that is idempotency, not a lock.' },
 
     { text: 'A console tool writes to a local file and must not run twice on the same machine.',
-      options: ['4 — pick a lock by blast radius', '1 — the store can enforce it',
-                '3 — contention is avoidable', '6 — an efficiency lease is fine'],
+      options: ['1 — the store can enforce it',
+                '3 — contention is avoidable',
+                '4 — pick a lock by blast radius',
+                '6 — an efficiency lease is fine'],
       answer: '4 — pick a lock by blast radius',
       why: 'Multiple processes, one machine, no database involved. A named Mutex — and Global-prefixed, or on Unix it is scoped to the POSIX session and on Windows to the Terminal Services session, and your guard silently does nothing.' }
   ]

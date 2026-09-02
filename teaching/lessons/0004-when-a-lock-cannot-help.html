@@ -153,7 +153,7 @@ Quiz.choice({
         'Wrap the call in a serializable transaction so it cannot interleave'
       ],
       answer: 'Record the intent behind a unique constraint, then send if you won',
-      why: 'The first two make the lock stronger, which was never the failing part. The fourth cannot help because the API call is not part of your transaction. The third converts an unfenceable effect into a database race you CAN win. Be precise about its crash window though: insert-then-send can OMIT the send (crash after the insert, and a retry sees the row and assumes it was sent) — it does not duplicate. Duplication needs the other shape: insert-pending, send, mark-sent, where a crash after sending loses the acknowledgement. Neither is exactly-once; you are choosing which failure to reconcile.' }
+      why: 'The first two make the lock stronger, which was never the failing part. The fourth cannot help because the API call is not part of your transaction. The third converts an unfenceable effect into a database race you CAN win. Note it is not exactly-once either: insert-then-send can OMIT the send, insert-pending/send/mark-sent can DUPLICATE it, and you are choosing which failure to reconcile. Building that properly is session 3's subject — recognising you have reached the boundary is what this lesson is for.' }
   ]
 });
 </script>

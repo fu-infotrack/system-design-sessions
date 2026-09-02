@@ -3,9 +3,10 @@
 #:property PublishAot=false
 #:include connection.cs
 
-// §3.3 — session-scoped vs transaction-scoped advisory locks.
-// Connects DIRECTLY to Postgres (no PgBouncer). For the pooling disaster,
-// see 04b-pgbouncer-leak.cs.
+// §3.3 — session-scoped vs transaction-scoped advisory locks, made visible
+// through pg_locks. Connects DIRECTLY to Postgres with pooling OFF, so the
+// only thing holding a lock is the session you can see.
+// For what a connection POOL does to a session lock, see 10-efcore-pooling.cs.
 //   dotnet run 04-pg-advisory.cs
 
 using Npgsql;

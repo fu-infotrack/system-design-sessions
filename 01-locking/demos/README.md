@@ -1,6 +1,8 @@
 # Locking demos
 
-Eleven demos, no `.csproj`, no `.sln`.
+Ten demos across twelve files, no `.csproj`, no `.sln`. (`03-mutex-a`,
+`03-mutex-b` and `03-mutex-scope.sh` are one demo; `apphost.cs` and
+`connection.cs` are shared infrastructure, not demos.)
 
 **Three are used in the 25-minute talk** — `03-mutex-scope.sh`,
 `10-efcore-pooling.cs`, `07-expiry.cs` — climbing the scope ladder from one
@@ -21,7 +23,8 @@ real machine — nothing here is illustrative-only.
 
 ## Running
 
-Demos 1–3 need nothing. The rest need containers:
+Demos 1 and 2 need nothing. `03-mutex-scope.sh` needs Docker for scenarios 3
+and 4 only (not Aspire). The rest need the containers:
 
 ```sh
 aspire run                       # Postgres 18.3 + Redis 8
@@ -57,7 +60,7 @@ dotnet run 09-optimistic.cs                # reference: optimistic concurrency
 | `06-redis-lock.cs` | 4.1 | Why unlock must be compare-and-delete. `--naive` deletes someone else's lock, live. |
 | `07-expiry.cs` | 4 | **The money shot.** A by-the-book lock, and the invariant breaks anyway. `--fence` shows the fix. |
 | `09-optimistic.cs` | Framework §4 | *Reference.* Lost update; the rows-affected gotcha; retry cost vs contention (2→0.5, 16→7.5 per worker). |
-| `08-no-lock.cs` | Framework §4 | *Reference.* | 8 racers → 8 charges unguarded, → 1 row with a unique index, → 1 booking with `EXCLUDE`. The answer is usually not a lock. |
+| `08-no-lock.cs` | Framework §4 | *Reference.* 8 racers: 8 charges unguarded, 1 row with a unique index, 1 booking with `EXCLUDE`. | 8 racers → 8 charges unguarded, → 1 row with a unique index, → 1 booking with `EXCLUDE`. The answer is usually not a lock. |
 
 ## Flags, not file-switching
 

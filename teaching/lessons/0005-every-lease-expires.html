@@ -31,8 +31,8 @@ Neither is told. Our demo does exactly this with a textbook-correct Redis lock:<
 <pre><code>dotnet run 07-expiry.cs
 
 expected counter: 8
-actual counter:   4
-lost updates:     4</code></pre>
+actual counter:   5      <-- varies per run
+lost updates:     3</code></pre>
 
 <h3>The category is much bigger than "locks"</h3>
 
@@ -131,7 +131,7 @@ Quiz.sort({
       why: 'A row lock has no clock. It is held until the transaction ends, however long that takes. It can still be lost if something kills your session, but slow work alone will never release it.' },
     { text: 'A Kafka consumer whose handler occasionally takes six minutes.',
       answer: 'Is a lease',
-      why: 'max.poll.interval.ms defaults to five minutes. The background thread leaves the group while your application thread keeps working, the partition is reassigned, and your eventual commit is rejected — after the work is already done.' },
+      why: 'max.poll.interval.ms defaults to five minutes. Heartbeating lives on a background thread rather than your handler, so the group evicts you while the handler is still going; the partition is reassigned, and your eventual commit is rejected — after the work is already done. KIP-447 names this case Fence Zombie.' },
     { text: 'A named Mutex held by a desktop process that hangs for an hour.',
       answer: 'Is not one',
       why: 'An OS kernel object with no expiry. It is released when the process dies or the handle closes, never on a timer — which is why it deadlocks rather than double-runs.' },
@@ -146,13 +146,13 @@ Quiz.choice({
   items: [
     { text: 'A Service Bus handler overruns its lock about once a week, causing duplicate work. What is the best first move?',
       options: [
-        'Raise LockDuration to the maximum of five minutes',
-        'Enable auto lock renewal so the lock is never lost',
-        'Make the handler safe to run twice, then tune if needed',
-        'Move the work to a Redis lock with a longer expiry'
+        'Raise LockDuration to its five-minute maximum',
+        'Enable auto lock renewal so it is never lost',
+        'Make the handler safe to run twice, then tune',
+        'Move the work to a Redis lock, longer expiry'
       ],
-      answer: 'Make the handler safe to run twice, then tune if needed',
-      why: 'The first three trade one failure for another: a longer lease delays recovery from dead workers, renewal narrows the window without closing it, and a different lock technology has the identical problem. Only the third removes the consequence. Tuning afterwards is fine — it just should not be the thing you rely on.' }
+      answer: 'Make the handler safe to run twice, then tune',
+      why: 'The other three trade one failure for another: a longer lease delays recovery from dead workers, renewal narrows the window without closing it, and a different lock technology has the identical problem. Only making the handler repeatable removes the consequence. Tuning afterwards is fine — it just should not be the thing you rely on.' }
   ]
 });
 </script>

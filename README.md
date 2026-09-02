@@ -18,7 +18,7 @@ The thesis: **a lock is never the goal — protecting an invariant is.**
 
 Most developers enter the problem at "I need a distributed lock, which one?"
 The framework's job is to make three questions happen first — can the data
-store enforce this itself, does the side effect land outside the store, and
+store enforce this itself, does the side effect leave the store and resist safe repetition, and
 can contention be made structurally impossible. In practice most questions
 terminate there, and the answer is a unique constraint or an idempotency key.
 
@@ -31,13 +31,12 @@ page. Idempotency is deferred to session 3, which teaches it properly.
 - **[TALK.md](01-locking/TALK.md)** — 25-minute run sheet: three demos up the scope ladder, then the framework
 - **[slides/](01-locking/slides/)** — the deck. Self-contained HTML, no build, speaker notes on `n`
 - **[NOTES.md](01-locking/NOTES.md)** — the deep version, all mechanisms, ~80 min of material
-- **[demos/](01-locking/demos/)** — eleven file-based scripts, all verified running
+- **[demos/](01-locking/demos/)** — 10 file-based demos, all verified running
 - **[research/](01-locking/research/)** — primary-source notes behind every claim
 
 ### Why the research folder exists
 
-Locking is a topic where the folklore is unusually wrong. Eight questions were
-researched against primary sources — official docs, Roslyn source, the actual
+Locking is a topic where the folklore is unusually wrong. Questions were researched against primary sources — official docs, Roslyn source, the actual
 Kleppmann and antirez posts — and several were verified by standing up real
 infrastructure rather than reading about it.
 

@@ -16,8 +16,9 @@ correctness. A sloppy implementation is acceptable.
 _Avoid_: soft lock, best-effort lock
 
 **Correctness lock**:
-A lock whose failure corrupts data. Mutual exclusion alone is never sufficient
-here; the resource must reject stale writers.
+A lock whose failure corrupts data. An in-process lock, or a row lock inside
+the transaction that does the write, is sufficient. An **unfenced lease** is
+not, and no lock is once the effect leaves your store.
 _Avoid_: hard lock, strict lock
 
 **Reentrant**:
@@ -38,7 +39,8 @@ _Avoid_: TTL lock, timed lock
 **Fencing token**:
 A monotonically increasing number issued with a lock, which **the protected
 resource** checks and uses to reject anything older.
-_Avoid_: sequence number, version (reserve for optimistic concurrency)
+_Avoid_: sequence number. (A version column in `WHERE version = @v` genuinely
+is one — optimistic concurrency is fencing applied to a row.)
 
 **Session-scoped**:
 Bound to a database connection, released when that connection closes. Correct

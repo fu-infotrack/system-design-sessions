@@ -52,7 +52,7 @@ that separates "safe" from "safe as long as nothing pauses."
 | `lock` / `Monitor` | **no** | yes | Cannot `await` inside — ownership is thread-bound |
 | `System.Threading.Lock` (.NET 9+) | no | yes | Held in an `object`-typed variable it silently falls back to `Monitor`, **and the two do not mutually exclude each other** |
 | `SemaphoreSlim(1,1)` | **yes** | **no** | `new SemaphoreSlim(1)` sets maxCount to `int.MaxValue` — a stray `Release()` silently raises your concurrency limit |
-| `ReaderWriterLockSlim` | no | opt-in | Frequently slower than a plain `lock`; measure before assuming |
+| `ReaderWriterLockSlim` | no | opt-in | Heavier than a plain `lock` — only pays off when reads dominate and the critical section is long. Unmeasured here; measure before assuming |
 | `Lazy<T>` | n/a | n/a | The lock you didn't have to write |
 
 ### One machine
@@ -85,7 +85,7 @@ monotonic number, but nothing checks it until **you** wire the resource to.
 |---|---|---|---|
 | Redis `SET NX PX` | TTL | no | Unlock must be compare-and-delete; expires mid-work |
 | Redlock | TTL | no | Contested; see §4 of the talk. Complexity for a safety property it doesn't fully deliver |
-| etcd / ZooKeeper lease | session expiry — 20 s default | **token only** (revision/zxid) | Best loss detection of any provider — but the revision fences nothing until *you* make the resource check it |
+| etcd / ZooKeeper lease | session expiry — 20 s for ZooKeeper via `DistributedLock`; etcd's is configurable and not measured here | **token only** (revision/zxid) | Best loss detection of any provider — but the revision fences nothing until *you* make the resource check it |
 | MongoDB (via `DistributedLock`) | TTL — 30 s | **token only** — exposes `FencingToken` | The only TTL provider that *can* be made safe — the token is handed to you, checking it is your job |
 | Azure Blob lease | 15–60 s or infinite | **service-enforced**, that blob only | `DistributedLock.Azure` leases a *sentinel* blob by default — mutual exclusion without the fencing. `Duration(-1)` means a dead holder never releases |
 | Idempotency key | n/a | **service-enforced** by the far side | Needs a dedupe store — and is stronger than any lock |
@@ -341,7 +341,7 @@ you back, it is sending you to one of these three:
       row already exists ........ SELECT ... FOR UPDATE
       pulling from a queue ...... FOR UPDATE SKIP LOCKED
       no row yet / abstract key . pg_advisory_xact_lock
-      never .................... pg_advisory_lock  (leaks through pools)
+      never on a POOLED conn ... pg_advisory_lock  (fine on a dedicated one)
     YES -> done. This is the best distributed lock most teams have.
 
 6.  Efficiency or correctness?
@@ -560,9 +560,429 @@ to be ignored.
    `pg_stat_activity` where `state = 'idle in transaction'` on Postgres. Neither
    shows up as a slow query, which is why this reaches production.
 
-*Sources: SQL Server transaction log truncation and row-versioning guides;
-PostgreSQL routine vacuuming and client connection defaults. Verified against
-primary docs.*
+*Sources, all primary and verified against the current docs:*
+- *[SQL Server — The transaction log](https://learn.microsoft.com/en-us/sql/relational-databases/logs/the-transaction-log-sql-server)* — `log_reuse_wait_desc = ACTIVE_TRANSACTION`, "long-running transactions prevent log truncation under all recovery models", and tempdb's log filling from internal objects "even if the user transaction includes only reading data".
+- *[SQL Server — locking and row versioning guide](https://learn.microsoft.com/en-us/sql/relational-databases/sql-server-transaction-locking-and-row-versioning-guide)* — that the default `READ COMMITTED` with `READ_COMMITTED_SNAPSHOT` `OFF` "uses shared locks", not row versioning.
+- *[PostgreSQL — Routine vacuuming](https://www.postgresql.org/docs/current/routine-vacuuming.html)* — the xmin horizon, that plain `VACUUM` "will not return the space to the operating system", and the wraparound warning at 40M / refusal at 3M XIDs.
+- *[PostgreSQL — Client connection defaults](https://www.postgresql.org/docs/current/runtime-config-client.html)* — the four timeouts and their zero defaults, and that `statement_timeout` is "measured from the time a command arrives at the server until it is completed".
+
+*Not yet written up as a `research/` file; the links above are the sourcing.*
+
+### 6 · Efficiency, not correctness
+
+**"Only one node should rebuild the search index."** Three pods, each with the
+same schedule, all waking up to rebuild from source data.
+
+Why this lands on 6 and not earlier:
+
+- **Step 1** — "only one rebuild at a time" isn't a predicate over rows. No
+  constraint expresses it.
+- **Step 2** — the write leaves your store, so it *looks* like step 2. But step
+  2 is about effects you cannot safely repeat, and a deterministic overwrite
+  repeats safely: same source in, same index out. Nothing to deduplicate.
+- **Step 3** — only if you can designate one node, which is leader election.
+  Three identical replicas each running their own schedule can't.
+- **Step 5** — the protected thing is the *index*, not a row. (Rebuilding a
+  materialised view **inside** Postgres would stop here, with an advisory
+  lock.)
+- **Step 6** — a double-run costs CPU, I/O, cloud spend and load on the source
+  database. It does not produce wrong data.
+
+So: `SET NX PX` with a unique token and a compare-and-delete unlock, and accept
+that it will occasionally double-run.
+
+#### The recipe, spelled out
+
+**Acquire** — one atomic command:
+
+```
+SET lock:reindex <random-token> NX PX 30000
+```
+
+| | |
+|---|---|
+| `NX` | only if **N**ot e**X**ists — first caller wins, the rest get nil. This is the mutual exclusion |
+| `PX 30000` | expire after 30,000 ms. **Mandatory** — if the holder dies, nothing else will release it |
+| `<random-token>` | unique per acquisition. The part people skip, and it is load-bearing |
+
+**Release** — *not* `DEL`. Compare the value against your token, then delete,
+atomically on the server:
+
+```lua
+if redis.call("get", KEYS[1]) == ARGV[1]
+  then return redis.call("del", KEYS[1]) else return 0 end
+```
+
+Redis 8.4+ has this as a command: `DELEX lock:reindex IFEQ <token>`.
+
+#### And what Redlock adds
+
+Redlock is **this same recipe run against N nodes**, with a majority rule and a
+clock check on top. The primitive is identical; Redlock is the protocol around
+it.
+
+| | `SET NX PX` | Redlock |
+|---|---|---|
+| Nodes | 1 | N independent masters, **no replication between them** |
+| You hold it when | the `SET` succeeded | **majority** *and* the round trip finished inside the TTL |
+| Working window | the TTL | `TTL − (T2−T1) − clock drift` |
+| Survives a node dying | no | yes |
+| Fences the resource | no | **also no** |
+
+It exists because one instance is a single point of failure — and the obvious
+fix, a replica, doesn't work: Redis replication is **asynchronous**, so a
+failover can lose the lock write and grant the same lock twice. Redlock's answer
+is to not replicate at all.
+
+**Which to reach for.** Kleppmann's summary is why step 6 above names only the
+single-instance form: *if you want efficiency, one instance is enough and
+Redlock's complexity buys nothing; if you want correctness, Redlock doesn't get
+you there either, because it still doesn't fence.* He argues it occupies a
+middle ground that doesn't exist. antirez disputes the framing — but both agree
+it does not fence, and redis.io now says "You should implement fencing tokens."
+
+One operational trap: without `fsync=always`, a node that crashes and restarts
+**forgets it granted a lock**, so 3-of-5 becomes lockable again and two clients
+hold it. The mitigation is delayed restart — keep a crashed node out of the pool
+for longer than the maximum TTL.
+
+**Why the token is load-bearing.** Plain `DEL` does not merely fail to protect
+you — it breaks the *next* holder:
+
+1. A acquires, TTL 30 s
+2. A stalls 35 s — a GC pause is enough
+3. The lock expires
+4. B acquires it, legitimately
+5. A wakes, finishes, calls `DEL` → **deletes B's lock**
+6. C acquires. B and C are now both running.
+
+With the compare-and-delete, A's release is a no-op because its token no longer
+matches. It must be server-side atomic — `GET` then `DEL` from the client has a
+race in the gap, where the lock can expire and be re-acquired.
+
+`06-redis-lock.cs --naive` runs the broken version live.
+
+**The test for this branch: write down what a double-run costs.** Money → you
+are here. Wrong data → you are not.
+
+#### The trap: "rebuild" is not automatically an efficiency case
+
+If the rebuild is **delete-then-insert**, this is *not* step 6. Node A
+truncates while node B is halfway through writing, and you serve an empty or
+partial index. That's corruption, and it flips the problem to step 7.
+
+The real test is not *"is this a rebuild"* but **"is the operation atomically
+repeatable"**.
+
+#### Which points at the better answer
+
+Build into a **new** index and atomically swap an alias:
+
+```
+search_v17  <- build here
+search      -> alias, swapped atomically when the build completes
+```
+
+Two concurrent runs each build their own index, the last swap wins, and nobody
+ever serves a half-built result. **The lock disappears** — this is immutability
+plus an atomic pointer swap, which is step 1, not step 6.
+
+That is the general move whenever you land on 6: an efficiency lock is a *cost
+optimisation*, so ask whether restructuring removes the cost instead. If you
+keep the lock, say so in a comment — and if you find yourself adding renewal,
+watchdogs and fencing to it, you have misdiagnosed. Either it was correctness
+all along (fix the operation), or you are gold-plating a way to save money.
+
+> ### Steps 6 and 7 are not about which lock you pick
+>
+> A natural objection: *Redis locks and Azure blob leases look like the same
+> thing — both TTL leases that can expire mid-work. Why do they land on
+> different branches?*
+>
+> They **are** the same kind of lock. Step 7 is not asking about your lock at
+> all. It asks a question about the **resource**:
+>
+> > When your lease has expired and you write anyway, does the resource
+> > stop you?
+>
+> - **Redis** — no. The lock lives in Redis; the thing you're protecting is
+>   somewhere else, and nothing connects them. Redis has no idea what you're
+>   guarding, so an expired lease does not prevent a single byte from being
+>   written.
+> - **Azure lease on the blob you are writing** — yes. The lock *is* on the
+>   resource. Storage rejects the write without the current lease ID (`409` /
+>   `412`). Your lease expiring makes your **write** fail.
+>
+> So the same technology lands on either branch, depending on what it guards:
+>
+> | Lock | Protects | Resource checks? | Branch |
+> |---|---|---|---|
+> | Redis `SET NX PX` | an index, an API, a database | **no** — nothing links them | 6 |
+> | Azure lease on blob X | **blob X** | yes — `409`/`412` | 7 |
+> | Azure lease on a *sentinel* blob | something else | **no** | **6** |
+> | PG advisory lock + write in one transaction | rows in that database | yes — same transaction | 5 |
+> | Version-checked `UPDATE` | that row | yes — rows-affected | 1 |
+>
+> **Row 3 is the trap**, and it's the default: `DistributedLock.Azure` leases a
+> sentinel blob it invents. You get mutual exclusion with none of the fencing —
+> a step 6 answer wearing step 7's clothing.
+>
+> **The unifying idea:** fencing requires the lock and the resource to be the
+> **same system**, or the resource to check a token you carry. That's also why
+> step 5 is strong — `SELECT … FOR UPDATE` and the write commit in one
+> transaction, so the lock and the resource cannot disagree. Step 6 is the
+> branch where they are different systems and you are hoping.
+
+### 7 · Correctness — can the resource fence?
+
+#### What a fencing token is
+
+Used throughout this document, so worth pinning down. A **fencing token** is a
+monotonically increasing number issued *with* the lock. The protected resource
+remembers the highest it has seen and refuses anything lower.
+
+```
+Client 1  --lock(33)--> [40s GC pause] --------------> write(33)  X rejected
+Client 2                  --lock(34)--> write(34)  ok
+Resource                                   has seen 34, so 33 is stale
+```
+
+Client 1 still *believes* it holds the lock, and nothing tells it otherwise.
+But its write carries an old number, so the write dies at the door.
+
+**You cannot move that check client-side.** "Verify the lease hasn't expired
+just before writing" fails, because a pause can land *between* the check and
+the write. No client-side check is atomic with the write — which is exactly why
+the resource has to do it.
+
+**And you are already using fencing tokens.** This is the reframe worth having:
+
+```sql
+UPDATE orders SET status = @s, version = version + 1
+ WHERE id = @id AND version = @v;   -- rows affected = 0 -> you were stale
+```
+
+That version column **is** a fencing token, and the row is the resource
+checking it. Optimistic concurrency is fencing applied to a database row —
+which is why it appears at step 1 of the tree *and* here at step 7. Kafka hands
+you one free: the record offset is monotonic per partition, so
+`and last_offset < @offset` fences with nothing invented.
+
+Genuine implementations: ZooKeeper (`zxid`), etcd (revision), MongoDB via
+`DistributedLock` (`FencingToken`), and a version column you write yourself.
+
+**Why almost nobody implements it:** the load-bearing words are *the resource*
+— it has to participate. Most real resources are "send this email", "call this
+API", "move this physical thing", and you cannot fence those. Which is
+antirez's sharpest counter, and the honest limit of the idea:
+
+> If your resource can reject a stale fencing token, your resource is already a
+> linearizable store — and if you had one of those, why did you need a strong
+> distributed lock in the first place?
+
+(*Linearizable*: every operation appears to take effect atomically at a single
+point in time between call and response — the strongest consistency a store can
+offer, and the property a fencing check quietly requires.)
+
+That is why step 7 dead-ends where it does. No fencing available means no lock
+makes it correct, so the answer is to change the design.
+
+#### The worked example
+
+**Yes — "only one node may write the consolidated report blob."** The protected
+resource *is* the blob, and Azure rejects a write without the current lease ID.
+The service enforces it, which is what fencing actually requires. Same shape as
+a version-checked `UPDATE`: the resource refuses the stale writer.
+
+#### What an Azure blob lease actually is
+
+Verified against the `Lease Blob` REST docs — worth knowing precisely, because
+it is the only mainstream service that does resource-side enforcement out of
+the box.
+
+*"A lease on a blob provides exclusive **write and delete** access to the
+blob."* Reads are unaffected: `Get Blob`, `Get Blob Properties` and
+`List Blobs` all succeed with no lease ID. It is a write lock, not a
+read-write lock.
+
+Operations that **do** require the lease ID while one is active — missing it
+fails `412`: `Put Blob`, `Put Block`, `Put Block List`, `Put Page`,
+`Append Block`, `Set Blob Metadata`, `Set Blob Properties`, `Delete Blob`,
+and `Copy Blob` (destination).
+
+The outcome table is the important part:
+
+| Lease state | Write with your ID | Write with wrong ID | Write with **no** ID |
+|---|---|---|---|
+| Leased (A) | succeeds | `409` | `412` |
+| Expired (A) | **`412`** | `412` | **succeeds** |
+
+**Row 2 is the fencing working where it matters** — the stale holder, writing
+with its now-expired lease ID, is rejected by the service. That is a zombie
+being refused by the resource, which is exactly step 7's requirement. But a
+process that never took a lease writes straight through. **A lease binds
+participants, not the blob.**
+
+#### Three gotchas
+
+- **You cannot lease a blob that does not exist**, so a lease is the wrong tool
+  for *"only one process may create this file"*. That's a conditional write —
+  `If-None-Match: *` — first writer wins, the rest get `412`. Step 1, not 7.
+- **Container deletion bypasses blob leases entirely.** Per the docs: *"a
+  container can be deleted even if blobs within it have active leases."* Use
+  `Lease Container` if that matters.
+- **Failover is not instant.** If a lease *expires* rather than being released,
+  a client may wait **up to one minute** before a new lease can be acquired.
+  Fine for leader election, surprising if you expected fast handover.
+
+#### The two real use cases
+
+1. **Protecting a mutable shared blob** — a manifest, checkpoint or state file
+   that several workers update. The genuine step 7 case: the lock *is* the
+   resource.
+2. **Leader election on a sentinel blob** — the dominant real-world use (Azure
+   Functions/WebJobs singletons, `DistributedLock.Azure`'s default, Event Hubs
+   partition ownership). Here the blob is only a token, so there is **no
+   fencing** — that is a step 6 answer.
+
+**No — "only one node may send a settlement to a partner API that is not
+idempotent and has no version check."** Correctness matters, the side effect is
+external, and the resource cannot reject a stale caller. **There is no lock
+that makes this safe**, and a framework that offered you one would be lying.
+
+What to do instead — and this is the dead-end being productive:
+
+1. Ask the partner for an idempotency key. Most payment and messaging APIs have
+   one. That's step 2, and it solves it outright.
+2. If they won't, build the dedupe yourself: record the intent in your database
+   first, with a unique constraint on a business key, and only send if the
+   insert won. You've converted an unfenceable external effect into step 1 plus
+   step 2.
+
+   Be honest about the crash window: **insert-then-send can omit the send**
+   (crash after the insert and a retry sees the row, assumes it was sent, and
+   never sends), while **insert-pending / send / mark-sent can duplicate**
+   (crash after sending and the retry cannot tell whether it landed). Neither is
+   exactly-once — you are choosing which failure to reconcile, and no lock
+   improves either.
+
+   Designing that properly is **session 3's** subject (Competing Consumer &
+   Idempotency). What step 2 needs from you here is only the recognition that
+   you have reached the boundary.
+
+### 5 · The database is the shared state
+
+Three different answers depending on what you're locking:
+
+- **"Deduct from an account balance."** The row exists and the work is short →
+  `SELECT … FOR UPDATE`. The lock and the write are in one transaction, so
+  they commit or roll back together.
+- **"Ten workers draining a jobs table."** → `FOR UPDATE SKIP LOCKED`. Each
+  worker takes a *different* row rather than queueing behind the one in front.
+- **"Per-tenant nightly import."** There is no row to lock — the thing you're
+  serialising on is a *concept*. → `pg_advisory_xact_lock(hash)`, inside an
+  explicit transaction.
+
+This branch is where most distributed-lock questions should land, and usually
+the reason they don't is that nobody realised the database was already
+sufficient.
+
+### The transaction-scoped lock that became a long transaction
+
+The most common way step 5 goes wrong in production, and worth its own section
+because the framework's own advice leads you into it.
+
+**The shape.** A pipeline behaviour or decorator — MediatR `IPipelineBehavior`,
+an interceptor, a `[Transactional]` attribute — opens a transaction around the
+whole handler:
+
+```csharp
+await using var tx = await db.Database.BeginTransactionAsync(ct);
+var response = await next();      // <-- the entire handler runs in here
+await tx.CommitAsync(ct);
+```
+
+Nothing about that is wrong on its own. It becomes wrong when a handler inside
+`next()` calls an HTTP API, a broker, a cache, or another database — because the
+transaction now spans a network call you do not control. If the downstream hangs,
+your transaction stays open for as long as the timeout allows, or forever if
+there isn't one.
+
+**Why the framework leads you here.** Step 5 recommends a transaction-scoped
+lock *because* the lock and the write commit together — no TTL, no clock. But
+that guarantee is purchased by tying the lock's lifetime to a transaction. So
+"hold the lock across this work" silently becomes "hold a transaction across
+this work."
+
+> **The diagnosis: this is step 5's answer applied to a step 2 problem.**
+> Wanting to hold a lock across an external call *is* step 2 — and step 2's
+> answer is idempotency, not a lock. The trap is only reachable by skipping it.
+
+#### What it costs, by engine
+
+| | SQL Server | PostgreSQL |
+|---|---|---|
+| Primary damage | log cannot truncate (`log_reuse_wait_desc = ACTIVE_TRANSACTION`) → log grows → error 9002 | **`VACUUM` cannot remove dead tuples** → table and index bloat |
+| Preconditional? | the *version store* half needs RCSI or snapshot isolation | **no — MVCC is always on, at every isolation level** |
+| Blast radius | that database's log | **the whole database** — the held-back xmin horizon blocks cleanup on tables you never touched |
+| Extreme case | log fills the disk | **XID wraparound**: at 40M transactions PG warns, at 3M it refuses to assign new XIDs and only read-only transactions can start |
+| Recovery | end the transaction and the log truncates | **end the transaction and the bloat remains** — plain `VACUUM` marks space reusable but *"will not return the space to the operating system"* |
+
+That last row is the one to remember: **on Postgres the damage outlives the
+transaction.** Reclaiming it needs `VACUUM FULL` or `pg_repack`.
+
+Two further notes. Under SQL Server **FULL recovery**, truncation needs a log
+backup *as well as* no active transaction, so a stuck transaction plus a missed
+backup is a much shorter path to 9002 than either alone. And on Postgres, with
+`hot_standby_feedback = on`, a long transaction **on a replica** holds back the
+primary's xmin — a slow report on a read replica can bloat the write primary.
+
+#### The Postgres defaults that will not save you
+
+All four relevant timeouts default to **zero, disabled**:
+
+| Setting | Default | Covers idle *inside* a transaction? |
+|---|---|---|
+| `statement_timeout` | 0 | **no** — measured per command, from arrival to completion |
+| `idle_in_transaction_session_timeout` | 0 | **yes** — this is the one you want |
+| `transaction_timeout` (PG 17+) | 0 | yes, total transaction duration |
+| `idle_session_timeout` | 0 | no — explicitly excludes open transactions |
+
+A handler awaiting an HTTP response is **idle in transaction**: no statement is
+running, so `statement_timeout` never fires. Teams that set `statement_timeout`
+and consider themselves covered are not.
+
+Set `idle_in_transaction_session_timeout`, and on PG 17+ add
+`transaction_timeout` as a backstop — noting the documented interaction, that a
+`transaction_timeout` shorter than or equal to the others causes the longer one
+to be ignored.
+
+#### The fixes, in order
+
+1. **Move external I/O out of the critical section.** If it can be done before
+   the transaction opens or after it commits, do that. Publishing events *after*
+   commit is the common correct version of this.
+2. **Scope the behaviour to commands**, not every request. A read query does not
+   need a write transaction — and note that even a `SELECT`-only transaction can
+   fill tempdb, because internal objects for sorts and hashes are created under
+   it.
+3. **Prefer optimistic concurrency to a lock.** A `rowversion` or version column
+   gives the same protection with *zero* transaction duration — no lock to hold
+   and no transaction to leave open.
+4. **Use an idempotency key for the external effect.** That was step 2's answer
+   before any of this started.
+5. **Alert on the symptom, not the code.** `log_reuse_wait_desc =
+   'ACTIVE_TRANSACTION'` on SQL Server; oldest `xact_start` in
+   `pg_stat_activity` where `state = 'idle in transaction'` on Postgres. Neither
+   shows up as a slow query, which is why this reaches production.
+
+*Sources, all primary and verified against the current docs:*
+- *[SQL Server — The transaction log](https://learn.microsoft.com/en-us/sql/relational-databases/logs/the-transaction-log-sql-server)* — `log_reuse_wait_desc = ACTIVE_TRANSACTION`, "long-running transactions prevent log truncation under all recovery models", and tempdb's log filling from internal objects "even if the user transaction includes only reading data".
+- *[SQL Server — locking and row versioning guide](https://learn.microsoft.com/en-us/sql/relational-databases/sql-server-transaction-locking-and-row-versioning-guide)* — that the default `READ COMMITTED` with `READ_COMMITTED_SNAPSHOT` `OFF` "uses shared locks", not row versioning.
+- *[PostgreSQL — Routine vacuuming](https://www.postgresql.org/docs/current/routine-vacuuming.html)* — the xmin horizon, that plain `VACUUM` "will not return the space to the operating system", and the wraparound warning at 40M / refusal at 3M XIDs.
+- *[PostgreSQL — Client connection defaults](https://www.postgresql.org/docs/current/runtime-config-client.html)* — the four timeouts and their zero defaults, and that `statement_timeout` is "measured from the time a command arrives at the server until it is completed".
+
+*Not yet written up as a `research/` file; the links above are the sourcing.*
 
 ### 6 · Efficiency, not correctness
 
@@ -995,7 +1415,7 @@ entity is a runtime workaround for a routing decision you didn't make.
 | | How | Example |
 |---|---|---|
 | **Partition by key** | All messages for a key land in one partition; one consumer in the group owns that partition | Kafka partition key, Azure Service Bus **sessions** — but read the caveat below |
-| **Actor / grain** | One addressable object per entity, single-threaded per activation | Orleans — the runtime guarantees one activation of `order-123`, processing one message at a time |
+| **Actor / grain** | One addressable object per entity, single-threaded per activation | Orleans — a grain activation processes one message at a time. Note the *single-threaded per activation* guarantee is the documented one; whether two silos can briefly host an activation of the same identity during a membership change is unverified (`research/09`) |
 | **Consistent hashing** | Each worker owns a disjoint slice: `hash(key) % N == me` | Sharded background workers |
 | **Single designated writer** | Exactly one component may write this table or aggregate; everyone else asks it to | Ownership boundaries between services |
 
@@ -1039,8 +1459,8 @@ ownership**, and it fails in exactly the shape a Redis TTL does:
 ```
 1. Consumer A polls a batch, starts processing record X
 2. A exceeds max.poll.interval.ms  (a long GC, a slow downstream call)
-3. A's BACKGROUND thread sends LeaveGroup. A's application thread is
-   never interrupted -- it keeps processing X.
+3. A's BACKGROUND thread sends LeaveGroup. Heartbeating lives on that
+   thread, not the application thread, so processing of X continues.*
 4. The partition is reassigned to B, which resumes from the last
    COMMITTED offset -- and processes X too.
 5. A finishes and tries to commit. Rejected on generation id / member epoch.
@@ -1049,6 +1469,13 @@ ownership**, and it fails in exactly the shape a Redis TTL does:
 Step 5 is the fencing, and it arrives **after A's work is already done**.
 Kafka's own KIP-447 documents this sequence under the heading *"Fence
 Zombie"* — it is a known, named case, not an edge.
+
+*\* Derived from KIP-62, which puts heartbeating on a background thread. Whether
+a particular client library also interrupts or cancels the application thread on
+eviction is **not verified** — see the open items in
+[`research/11`](research/11-kafka-partitioning-exclusivity.md). The zombie
+window is documented by KIP-447 either way; only the thread mechanics are
+unconfirmed.*
 
 A rejected commit does not undo A's HTTP POST or its database write.
 
@@ -1159,7 +1586,8 @@ out of date since PG 9.4: freezing sets a flag bit and preserves the original
 **For leader election on Postgres, a dedicated-connection advisory lock beats
 a TTL lock.** There is no lease to expire mid-work and no clock to be wrong —
 the connection itself is the liveness signal, and a dead process drops it.
-Marten's async daemon works this way. That said, it is still efficiency-grade:
+Libraries that do leader election on Postgres work this way. That said, it is
+still efficiency-grade:
 a network partition can leave the old leader running while a new one is
 elected, so the work must tolerate two leaders briefly.
 

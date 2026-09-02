@@ -408,13 +408,19 @@ There the connection-scoped behaviour is exactly what you want — the process
 dies, its connection drops, the lock releases, another node takes over. No
 TTL, no renewal, no clock. The connection *is* the liveness signal.
 
-**Marten's async daemon is the concrete .NET example.** `HotCold` mode elects
-a leader per projection per tenant database so each runs on exactly one
-process. Its default is `pg_try_advisory_xact_lock` holding a long-lived
-*transaction* open for as long as the node leads (session-scoped is
-configurable), and it parks `SELECT pg_catalog.pg_sleep(60)` on that
-connection to detect a database restart or failover — the same parked-query
-trick `DistributedLock` uses for `HandleLostToken`.
+**What the pattern looks like.** A background service opens **one connection it
+owns for its lifetime**, takes the lock on it, and holds it while it works. It
+never borrows from the pool serving HTTP requests. To notice the connection
+dying it parks a long-running no-op query on it — `SELECT pg_sleep(60)` in a
+loop — and watches for that query to fail; `DistributedLock` uses the same trick
+for `HandleLostToken` (`research/10`).
+
+> Libraries do implement this — [Marten's async
+> daemon](https://martendb.io/events/projections/async-daemon.html) elects a
+> projection leader with advisory locks, for instance. We don't run Marten, and
+> the details of any one library's mode aren't sourced in `research/`, so treat
+> the link as a pointer rather than as a claim this repo stands behind. **The
+> pattern is the transferable part.**
 
 **The distinction is the connection, not the function name:**
 
@@ -565,7 +571,7 @@ idempotency — §5.
 | Redlock | TTL | no | contested; complexity ↑ |
 | PG advisory (xact) | on disconnect | no | **no TTL to get wrong** |
 | PG `UPDATE … WHERE version=` | n/a | **yes** | the resource checks — real fencing |
-| etcd / ZooKeeper lease | session expiry | yes (revision / zxid) | correct, more ops |
+| etcd / ZooKeeper lease | session expiry | **token only** (revision / zxid) | the revision fences nothing until you wire the resource to check it |
 | Azure Blob lease | 15–60s or ∞ (-1) | **for that blob, yes** — see below | underrated for Azure shops |
 | DynamoDB conditional write | n/a | yes (version attribute) | it's optimistic concurrency |
 
@@ -784,8 +790,8 @@ It also sidesteps a sharp edge: Aspire's injected Redis string now carries
 
 ## Research — done
 
-All seven questions answered from primary sources, several verified by
-live experiment rather than reading. Files in `research/`:
+All questions answered from primary sources, several verified by live
+experiment rather than reading. Files in `research/`:
 
 | File | Verified how |
 |---|---|
@@ -808,10 +814,10 @@ Things I'd have said on stage that turned out to be wrong:
 - "`SemaphoreMaxCountExceededException`" — doesn't exist. It's `SemaphoreFullException`.
 - "Advisory locks have no timeout" — `lock_timeout` and `statement_timeout` both apply.
 - "A named `Mutex` is machine-wide" — on Unix it's **POSIX-session**-scoped.
-- "The PgBouncer problem is a leaked lock" — it's a *silent mutual-exclusion
+- "A leaked advisory lock just stalls the next caller" — it's a *silent mutual-exclusion
   violation*; a second client is told it acquired the lock.
 - "Azure blob lease ID is a fencing token" — equality-checked GUID, not monotonic,
   and `DistributedLock.Azure` leases a sentinel blob by default anyway.
 
 That list is itself a good closing slide: **the folklore was wrong seven times
-out of seven.**
+every time we checked.**

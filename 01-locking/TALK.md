@@ -137,9 +137,9 @@ to a request; the connection underneath it isn't.
 
 **Pre-empt the objection**, because someone will raise it and they're right:
 session-scoped advisory locks *do* have a proper use — holding something for
-the lifetime of a **process** rather than a request. Leader election. Marten's
-async daemon elects a projection leader exactly this way, on a dedicated
-long-lived connection, and parks a `pg_sleep(60)` on it to notice a failover.
+the lifetime of a **process** rather than a request. Leader election: a
+background service holds **one connection it owns**, takes the lock on it, and
+parks a `pg_sleep` on that connection to notice the connection dying.
 
 The distinction isn't the function name, it's the connection: **a dedicated
 connection you own, versus one borrowed from a request-serving pool.**
@@ -154,8 +154,8 @@ dotnet run 07-expiry.cs
 
 ```
 expected counter: 8
-actual counter:   4
-lost updates:     4
+actual counter:   5      <-- varies per run
+lost updates:     3
 ```
 
 **Say:** every worker took the lock. `SET NX PX`, unique token,
@@ -172,7 +172,7 @@ If you have 40 seconds spare:
 dotnet run 07-expiry.cs -- --fence
 ```
 
-Three writes rejected instead of four silently lost, because the **resource**
+Stale writes rejected instead of silently lost, because the **resource**
 checked a fencing token. Note what that required: the resource had to
 participate. You cannot fence an email.
 
@@ -191,7 +191,7 @@ The heart of it. [`FRAMEWORK.md`](FRAMEWORK.md) on screen.
    "Two threads shouldn't run this method" is a symptom.
 2. **What does a double-run cost?** Wasted money (*efficiency*) or corrupted
    data (*correctness*)? Different answers, different tools.
-3. **Where does the side effect land** — inside your store, or outside it?
+3. **Where does the side effect land** — inside your store or outside it, and is it safe to repeat?
 4. **What's the blast radius?** Threads, machine, or fleet.
 
 Get the room to sort *their own current work* into question 2's two columns.
@@ -201,7 +201,7 @@ This is the exercise that makes it stick, and it's worth the minute.
 
 ```
 1. Can the data store enforce it?          -> no lock
-2. Side effect outside the store?          -> idempotency, not a lock
+2. Leaves store, unsafe to repeat?         -> idempotency, not a lock
 3. Contention structurally avoidable?      -> no lock
 4. Blast radius?                           -> picks the family      [demo §2]
 5. Is the DB the shared state?             -> FOR UPDATE / xact     [demo §3]
@@ -241,7 +241,8 @@ answer is lying. Sometimes the honest output is *change the design*.
    think harder.
 2. **Distributed locks expire while you hold them.** Design for it or don't
    use one.
-3. **If the side effect leaves your process, you need idempotency, not mutual
+3. **If the side effect leaves your process and cannot be safely repeated,
+   you need idempotency, not mutual
    exclusion.**
 
 **And one practical instruction:** if the tree lands you at a distributed
@@ -265,7 +266,7 @@ step 5 of the tree, and it's why step 5 comes before step 6.
 questions, the tree, **a worked example for every branch**, Part 5's provider
 matrix, the anti-patterns table.
 
-**Close on the folklore table.** Eight things "everyone knows" about locking,
+**Close on the folklore table.** Things "everyone knows" about locking,
 none of which survived checking against primary sources — including a live
 documentation bug on Microsoft Learn. It argues for using a checklist better
 than any assertion could: this is a topic where intuition *and the docs* are

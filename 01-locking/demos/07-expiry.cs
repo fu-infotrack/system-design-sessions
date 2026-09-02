@@ -12,11 +12,13 @@
 //   dotnet run 07-expiry.cs             broken, as designed
 //   dotnet run 07-expiry.cs -- --fence  the resource rejects stale writers
 //   dotnet run 07-expiry.cs -- --ttl 5  widen the lease, lose less often
+//   dotnet run 07-expiry.cs -- --work 900  shorten the work, lose less often
 
 using StackExchange.Redis;
 
 var fence = args.Contains("--fence");
 var ttlSec = GetArg("--ttl", 2);
+var workMs = GetArg("--work", 2700);   // absolute, NOT relative to the TTL
 var workers = GetArg("--workers", 8);
 var ttl = TimeSpan.FromSeconds(ttlSec);
 
@@ -30,7 +32,11 @@ var db = redis.GetDatabase();
 await db.KeyDeleteAsync([Lock, Counter, Fence, Seq]);
 await db.StringSetAsync(Counter, 0);
 
-Console.WriteLine($"{workers} workers, lease TTL {ttlSec}s, fencing {(fence ? "ON" : "OFF")}");
+Console.WriteLine($"{workers} workers, lease TTL {ttlSec}s, slow work {workMs}ms, "
+                + $"fencing {(fence ? "ON" : "OFF")}");
+Console.WriteLine(workMs > ttlSec * 1000
+    ? $"  slow work EXCEEDS the lease by {workMs - ttlSec * 1000}ms -> expect lost updates"
+    : "  slow work fits inside the lease -> expect none");
 Console.WriteLine($"each worker: take the lock, read the counter, work, write counter+1\n");
 
 var rejected = 0;
@@ -48,11 +54,16 @@ await Task.WhenAll(Enumerable.Range(1, workers).Select(async id =>
     var read = (int)await db.StringGetAsync(Counter);
 
     // Simulate the pause that ruins everything: GC, VM deschedule, a slow
-    // downstream call. Half the workers overrun their own lease.
-    var overrun = id % 2 == 0;
-    var work = overrun ? ttl + TimeSpan.FromMilliseconds(700) : TimeSpan.FromMilliseconds(200);
+    // downstream call. Half the workers take the SLOW path.
+    //
+    // The slow duration is absolute, not a function of the TTL -- that is what
+    // makes --ttl meaningful. Raise the lease above the work and nothing
+    // overruns, which is the tuning trap the framework describes, live.
+    var slow = id % 2 == 0;
+    var work = slow ? TimeSpan.FromMilliseconds(workMs) : TimeSpan.FromMilliseconds(200);
+    var overruns = work > ttl;
     Console.WriteLine($"  w{id}: lock (fence {fenceToken}), read {read}, work {work.TotalSeconds:0.0}s"
-                    + (overrun ? "   <-- will overrun the lease" : ""));
+                    + (overruns ? $"   <-- exceeds the {ttlSec}s lease" : ""));
     await Task.Delay(work);
 
     var ok = fence
