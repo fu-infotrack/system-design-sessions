@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 4 — When a lock cannot help</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+
+<p class="eyebrow">Locking · Lesson 4 · ~7 minutes</p>
+<h1>When a lock cannot help</h1>
+<p class="standfirst">There is a class of problem where no lock, however
+correct, prevents the thing you are worried about. Recognising it is the single
+most valuable habit in this course.</p>
+
+<h2>The knowledge</h2>
+
+<p>Take the classic:</p>
+
+<pre><code>// runs on 3 pods
+if (order.Status == Pending)
+{
+    await _payments.ChargeAsync(order);   // the side effect
+    order.Status = Paid;
+    await _db.SaveChangesAsync();
+}</code></pre>
+
+<p>Everyone reaches for a distributed lock. Now look closely at what a lock
+would have to guarantee — and notice that it cannot:</p>
+
+<div class="callout">
+  <span class="label">The core idea</span>
+  <p><strong>The lock and the charge cannot commit together.</strong> They live
+  in different systems, so whatever order you choose, there is an instant where
+  one has happened and the other has not. Crash there and you cannot tell which.</p>
+</div>
+
+<p>Work it through. You hold the lock, you call the payment provider, and the
+response times out. Did the charge happen? You cannot know. Release the lock and
+retry, and you may charge twice — <em>while correctly holding the lock the whole
+time</em>.</p>
+
+<p>Mutual exclusion answers "is anyone else doing this?" It cannot answer "did
+<em>I</em> already do this?" — and that second question is the one that matters
+the moment an effect leaves your process.</p>
+
+<h3>The tell</h3>
+
+<p>Ask where the effect lands:</p>
+
+<table>
+  <thead><tr><th>Lands inside your store</th><th>Leaves your store</th></tr></thead>
+  <tbody>
+    <tr><td>a row update, an insert</td><td>a payment, an email, a partner API</td></tr>
+    <tr><td>a lock can be atomic with it</td><td>nothing can be atomic with it</td></tr>
+    <tr><td>lock, or a constraint, or a version check</td><td><strong>idempotency</strong></td></tr>
+  </tbody>
+</table>
+
+<p><strong>One qualifier</strong>, or the right-hand column swallows too much: an
+external effect that is <em>safe to repeat</em> does not need idempotency.
+Rebuilding a search index writes the same bytes twice — a double-run costs money,
+not correctness. The test is not "does it leave my store" but <strong>"does it
+leave my store <em>and</em> would repeating it do harm"</strong>.</p>
+
+<p>Inside your store you have a real option, because the lock and the write can
+commit or roll back together — that is why <code>SELECT … FOR UPDATE</code> in
+one transaction is stronger than any Redis lease. Outside, you need the
+operation to be <em>safe to repeat</em>, which is a property of the operation,
+not of who is allowed to run it.</p>
+
+<p>The usual mechanism is an <strong>idempotency key</strong> the far side
+deduplicates on — you send the same key, they charge once. Most payment and
+messaging APIs support it. <em>How</em> to build that is session 3's subject
+(Competing Consumer &amp; Idempotency); here we only need you to recognise when
+you have reached the boundary.</p>
+
+<h2>The practice</h2>
+
+<p>For each, decide whether a correctly-working lock would actually prevent the
+problem.</p>
+
+<div id="q1"></div>
+
+<h3>One harder one</h3>
+
+<div id="q2"></div>
+
+<h2>What to take away</h2>
+
+<p>When the effect leaves your process, a lock demotes from <em>the solution</em>
+to <em>an optimisation</em>. It stops duplicate work most of the time, which may
+be worth having — but it is not what makes you correct, and it should not be
+described in the code as though it is.</p>
+
+<p>The sentence to carry into review: <strong>"a lock stops two people doing it
+at once; it does not stop one person doing it twice."</strong></p>
+
+<div class="source">
+  <span class="label">Read this next</span>
+  <p><a href="https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html">Kleppmann,
+  <em>How to do distributed locking</em></a> — the fencing-token section is
+  exactly this argument, generalised. And note the practical objection he raises
+  against his own remedy: fencing needs the far side to cooperate, and an email
+  cannot.</p>
+</div>
+
+<div class="ask">
+  <strong>This one is worth arguing about.</strong> If you think a lock does
+  solve one of these, say so to your agent — the disagreement is where the idea
+  actually lands.
+</div>
+
+<nav class="lesson-nav">
+  <a href="0003-name-the-invariant.html">← Lesson 3</a>
+  <a href="0005-every-lease-expires.html">Lesson 5 →</a>
+  <a href="../../01-locking/FRAMEWORK.md">The full framework</a>
+</nav>
+
+<script src="../assets/quiz.js"></script>
+<script>
+Quiz.sort({
+  mount: '#q1',
+  buckets: ['Lock helps', 'Lock cannot'],
+  items: [
+    { text: 'Two pods both try to set an order status from Pending to Paid in Postgres.',
+      answer: 'Lock helps',
+      why: 'The effect is a row in a store you control, so the lock and the write can sit in one transaction and commit together. Though a conditional UPDATE ... WHERE status = Pending does the same job with no lock at all.' },
+    { text: 'A payment provider call is retried after a timeout, from the same pod.',
+      answer: 'Lock cannot',
+      why: 'You held the lock the entire time. The question is not "is someone else charging?" but "did my earlier attempt succeed?", and mutual exclusion has nothing to say about that. You need an idempotency key.' },
+    { text: 'Two workers both increment a counter row in the same database.',
+      answer: 'Lock helps',
+      why: 'Inside your store. A row lock works, and an atomic UPDATE counter = counter + 1 works better — no read-then-write, so no window to protect.' },
+    { text: 'A welcome email might be sent twice when a job is redelivered.',
+      answer: 'Lock cannot',
+      why: 'Once an email is sent it cannot be recalled, and the send is not atomic with anything you could roll back. You need a record of "already sent for this user" that the send is conditioned on.' },
+    { text: 'Two instances both write the same file to blob storage.',
+      answer: 'Lock helps',
+      why: 'A genuine edge case: blob storage can enforce it for you, because a lease on the blob makes the SERVICE reject a writer without the current lease ID. The resource participates, which is what makes it different from an email.' }
+  ]
+});
+
+Quiz.choice({
+  mount: '#q2',
+  items: [
+    { text: 'You must call a partner API that is NOT idempotent, has no version check, and must happen exactly once. What do you do?',
+      options: [
+        'Use Redlock across five Redis nodes for a stronger guarantee',
+        'Use a lease with renewal so it cannot expire mid-call',
+        'Record the intent behind a unique constraint, then send if you won',
+        'Wrap the call in a serializable transaction so it cannot interleave'
+      ],
+      answer: 'Record the intent behind a unique constraint, then send if you won',
+      why: 'The first two make the lock stronger, which was never the failing part. The fourth cannot help because the API call is not part of your transaction. The third converts an unfenceable effect into a database race you CAN win. Be precise about its crash window though: insert-then-send can OMIT the send (crash after the insert, and a retry sees the row and assumes it was sent) — it does not duplicate. Duplication needs the other shape: insert-pending, send, mark-sent, where a crash after sending loses the acknowledgement. Neither is exactly-once; you are choosing which failure to reconcile.' }
+  ]
+});
+</script>
+</body>
+</html>

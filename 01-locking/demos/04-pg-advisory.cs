@@ -17,8 +17,6 @@ Console.WriteLine($"direct -> {Conn.Postgres}\n");
 await Scenario("pg_advisory_lock  (SESSION scope)", "pg_advisory_lock", 42);
 Console.WriteLine();
 await Scenario("pg_advisory_xact_lock  (TRANSACTION scope)", "pg_advisory_xact_lock", 43);
-Console.WriteLine();
-await NpgsqlPoolLeak();
 
 Console.WriteLine("""
 
@@ -31,7 +29,7 @@ Console.WriteLine("""
 
     That is why the transaction-scoped form is the default you want. A
     session lock outlives the work it was protecting, and on a pooled
-    connection it outlives the REQUEST -- see 04b-pgbouncer-leak.cs.
+    connection it outlives the REQUEST -- see 10-efcore-pooling.cs.
     """);
 
 static async Task Scenario(string title, string fn, long Key)
@@ -61,48 +59,6 @@ static async Task Scenario(string title, string fn, long Key)
     await Task.Delay(150);
     Console.WriteLine($"  A: disconnected");
     Console.WriteLine($"     advisory locks visible: {await CountLocks(observer)}");
-}
-
-static async Task NpgsqlPoolLeak()
-{
-    // The .NET-flavoured version of the PgBouncer bug. No PgBouncer involved:
-    // this is Npgsql's OWN client-side pool, which is on by default.
-    const long Key = 44;
-    Console.WriteLine("=== the same bug, with no PgBouncer: Npgsql's own pool ===");
-
-    await using (var a = new NpgsqlConnection(Conn.PostgresPooled))
-    {
-        await a.OpenAsync();
-        await Exec(a, $"select pg_advisory_lock({Key})");
-        Console.WriteLine($"  request 1: took a SESSION lock on {Key}");
-    }   // Dispose() -> back to the pool. NOT closed.
-    Console.WriteLine("  request 1: connection disposed (\"finished\")");
-
-    await using var observer = new NpgsqlConnection(Conn.Postgres);
-    await observer.OpenAsync();
-    Console.WriteLine($"     advisory locks still on the server: {await CountLocks(observer)}");
-
-    await using (var b = new NpgsqlConnection(Conn.PostgresPooled))
-    {
-        await b.OpenAsync();          // same physical connection out of the pool
-        await using var cmd = new NpgsqlCommand($"select pg_try_advisory_lock({Key})", b);
-        cmd.CommandTimeout = CmdTimeoutSec;
-        var got = (bool)(await cmd.ExecuteScalarAsync())!;
-        Console.WriteLine($"  request 2: pg_try_advisory_lock({Key}) -> {got.ToString().ToUpper()}");
-        Console.WriteLine(got
-            ? "             it was TOLD it acquired the lock. Request 1 still holds it."
-            : "             correctly refused.");
-    }
-
-    Console.WriteLine("""
-
-      Two unrelated requests both believe they hold the same lock, on one
-      machine, with no PgBouncer anywhere. Npgsql pools by default, session
-      advisory locks ride the pooled connection, and re-acquiring in the
-      same session succeeds because session locks are STACKABLE.
-
-      No error. No log line. Use pg_advisory_xact_lock.
-    """);
 }
 
 static async Task<int> CountLocks(NpgsqlConnection c)

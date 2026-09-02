@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Locking — 25 min</title>
+<style>
+:root{
+  --bg:#14161a; --fg:#eceff4; --dim:#8b95a5; --accent:#e0785f;
+  --good:#7dcea0; --bad:#e5737d; --panel:#1d2026; --rule:#2c313a;
+  --mono:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+  --sans:ui-sans-serif,system-ui,"Segoe UI",Helvetica,sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font-family:var(--sans)}
+.deck{height:100%}
+.slide{
+  display:none; height:100vh; padding:6vh 8vw;
+  flex-direction:column; justify-content:center;
+}
+.slide.on{display:flex}
+h1{font-size:clamp(2.6rem,7vw,5rem);line-height:1.02;margin:0 0 1rem;letter-spacing:-.02em}
+h2{font-size:clamp(1.8rem,4.2vw,3rem);line-height:1.1;margin:0 0 1.6rem;letter-spacing:-.015em}
+h3{font-size:clamp(1.1rem,2vw,1.5rem);margin:0 0 .8rem;color:var(--dim);font-weight:600}
+p{font-size:clamp(1.05rem,1.9vw,1.5rem);line-height:1.5;margin:0 0 1rem;max-width:32ch}
+p.wide{max-width:48ch}
+.kicker{font-size:.75rem;letter-spacing:.2em;text-transform:uppercase;color:var(--accent);margin-bottom:1.4rem}
+.big{font-size:clamp(1.6rem,3.6vw,2.6rem);line-height:1.25;max-width:22ch}
+.dim{color:var(--dim)}
+.accent{color:var(--accent)}
+.good{color:var(--good)} .bad{color:var(--bad)}
+pre{font-family:var(--mono);font-size:clamp(.7rem,1.35vw,1.05rem);line-height:1.5;
+    background:var(--panel);border-left:3px solid var(--accent);
+    padding:1.2rem 1.4rem;border-radius:6px;overflow:auto;margin:0 0 1rem;max-width:100%}
+code{font-family:var(--mono)}
+ul,ol{font-size:clamp(1rem,1.8vw,1.4rem);line-height:1.6;padding-left:1.3em;margin:0;max-width:34ch}
+li{margin-bottom:.7rem}
+li::marker{color:var(--accent)}
+table{border-collapse:collapse;font-size:clamp(.8rem,1.5vw,1.15rem);width:100%;max-width:52rem}
+th,td{text-align:left;padding:.5rem .8rem;border-bottom:1px solid var(--rule);vertical-align:top}
+th{color:var(--dim);font-size:.75em;letter-spacing:.08em;text-transform:uppercase;font-weight:600}
+.cmd{font-family:var(--mono);background:#000;color:var(--good);
+     padding:1rem 1.3rem;border-radius:6px;display:inline-block;
+     font-size:clamp(.85rem,1.7vw,1.3rem)}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:2.5rem;align-items:start}
+.rule{height:2px;background:var(--accent);width:5rem;margin:0 0 1.6rem}
+footer{position:fixed;bottom:1.4rem;right:1.8rem;font-size:.75rem;color:var(--dim);
+       font-family:var(--mono);letter-spacing:.05em}
+#notes{position:fixed;left:0;right:0;bottom:0;background:#0b0d10;border-top:2px solid var(--accent);
+  padding:1.1rem 1.6rem;font-size:.92rem;line-height:1.5;color:#cfd6e0;display:none;max-height:38vh;overflow:auto}
+#notes.on{display:block}
+#notes b{color:var(--accent)}
+#help{position:fixed;bottom:1.4rem;left:1.8rem;font-size:.72rem;color:var(--rule);font-family:var(--mono)}
+@media print{
+  .slide{display:flex!important;height:100vh;page-break-after:always;break-after:page}
+  footer,#help,#notes{display:none}
+  :root{--bg:#fff;--fg:#111;--dim:#555;--panel:#f4f4f4;--rule:#ddd}
+}
+</style>
+</head>
+<body>
+<div class="deck" id="deck">
+
+<!-- 1 -->
+<section class="slide" data-notes="Cold open. No preamble. Get the code up before you say anything.">
+  <div class="rule"></div>
+  <h1>Locking</h1>
+  <p class="dim big">A way of deciding — not a tour of mechanisms.</p>
+</section>
+
+<!-- 2 -->
+<section class="slide" data-notes="<b>Say nothing.</b> Let them read it, then: 'this runs on three pods. Find the bug.' Wait for someone to say 'you need a lock'. Then park it — promise to come back at 21:00 and fix it without one.">
+  <p class="kicker">This runs on 3 pods</p>
+  <pre>var order = await _db.Orders.FindAsync(id);
+
+if (order.Status == OrderStatus.Pending)
+{
+    await _payments.ChargeAsync(order);
+    order.Status = OrderStatus.Paid;
+    await _db.SaveChangesAsync();
+}</pre>
+  <p class="dim">Find the bug.</p>
+</section>
+
+<!-- 3 -->
+<section class="slide" data-notes="Leave this up for a beat. It is the spine of the whole talk and you will refer back to it three times.">
+  <div class="rule"></div>
+  <h2>A lock is never the goal.<br><span class="accent">Protecting an invariant is.</span></h2>
+</section>
+
+<!-- 4 -->
+<section class="slide" data-notes="Set expectations. Three demos climbing the scope ladder. In each one a lock behaves differently from how the API name implies.">
+  <h3>The next ten minutes</h3>
+  <h2>Three demos.<br>Three scopes.</h2>
+  <ul>
+    <li>One machine</li>
+    <li>One database</li>
+    <li>The fleet</li>
+  </ul>
+  <p class="dim wide" style="margin-top:1.6rem">In each one, a lock behaves differently from how its name implies.</p>
+</section>
+
+<!-- 5 -->
+<section class="slide" data-notes="<b>Ask before you run it.</b> 'Two processes. Same machine. Same user. Same mutex name. Will they contend?' Almost nobody gets this right. Then run scenarios 1 and 2 — about 32 seconds.">
+  <p class="kicker">Demo — one machine</p>
+  <h2>A named <code>Mutex</code></h2>
+  <p class="wide">Two processes. Same machine, same user, same name.<br>
+  <span class="accent">Will they contend?</span></p>
+  <p class="cmd">./03-mutex-scope.sh 1 2</p>
+</section>
+
+<!-- 6 -->
+<section class="slide" data-notes="The path is the punchline — the session id is literally in the filename. Point at it. Then: 'cross-process is not cross-machine, and on Unix it is not even cross-session.'">
+  <p class="kicker">The reveal</p>
+  <pre>/tmp/.dotnet/shm/<span class="accent">session3616043</span>/OneTrueLock</pre>
+  <table>
+    <tr><th></th><th>unprefixed</th><th>Global\</th></tr>
+    <tr><td>different POSIX session</td><td class="bad">no contention</td><td class="good">BLOCKED</td></tr>
+    <tr><td>container sharing /tmp</td><td class="bad">no contention</td><td class="good">BLOCKED</td></tr>
+  </table>
+  <p class="dim" style="margin-top:1.4rem">Every "only one instance of this app" guard built this way is broken.</p>
+</section>
+
+<!-- 7 -->
+<section class="slide" data-notes="Windows has the identical trap by a different mechanism — kernel objects, Local\ = per Terminal Services session, service in session 0 vs desktop app in session 1+. And the ten-second one: WSL and Windows never share a named mutex at all.">
+  <h3>And on Windows</h3>
+  <h2>Same trap.<br>Different mechanism.</h2>
+  <p class="wide">Unprefixed means <code>Local\</code> — per Terminal Services session.
+  A <span class="accent">service runs in session 0</span>, a desktop app in session 1+.</p>
+  <p class="wide dim">A WSL process and a Windows process never share a named mutex.
+  <span class="accent">"Works on my machine" tells you nothing here.</span></p>
+</section>
+
+<!-- 8 -->
+<section class="slide" data-notes="This is our stack. EF Core on Npgsql's pool, on by default, nothing exotic. Run it and scroll to scenario 3.">
+  <p class="kicker">Demo — one database</p>
+  <h2>EF Core and<br>advisory locks</h2>
+  <p class="wide">Default settings. Nothing exotic.</p>
+  <p class="cmd">dotnet run 10-efcore-pooling.cs</p>
+</section>
+
+<!-- 9 -->
+<section class="slide" data-notes="Point at 'Closed'. EF closed the connection right after the statement — you never even reach the end of the request. Then: session advisory locks are STACKABLE, so re-acquiring on that connection succeeds. No error, no log line.">
+  <p class="kicker">The reveal</p>
+  <pre>request 1: took pg_advisory_lock(101)
+           connection state right after: <span class="accent">Closed</span>
+request 1: DbContext disposed
+   server still holds it: 1
+request 2: pg_try_advisory_lock(101) -> <span class="bad">TRUE</span>
+           <span class="dim">both told they hold it</span></pre>
+  <p class="dim">No error. No log line.</p>
+</section>
+
+<!-- 10 -->
+<section class="slide" data-notes="Both halves are load-bearing. The xact function alone, with no explicit transaction, runs in autocommit — acquired and released by the same statement. Measured: zero locks held afterwards. That is a quieter bug than the leak.">
+  <p class="kicker">The rule</p>
+  <h2><code>pg_advisory_xact_lock</code><br>
+    <span class="dim">inside an explicit transaction</span></h2>
+  <p class="wide">A session lock is bound to the <span class="accent">connection</span>.
+  Under EF Core you don't own the connection — the pool does.</p>
+  <p class="wide dim">Both halves matter. Without the transaction, autocommit
+  releases it in the same breath: <span class="bad">no lock at all</span>.</p>
+</section>
+
+<!-- 11 -->
+<section class="slide" data-notes="Everything by the book: SET NX PX, unique token, compare-and-delete unlock. Run it. It is nondeterministic — re-run if the number is unimpressive.">
+  <p class="kicker">Demo — the fleet</p>
+  <h2>A correct<br>Redis lock</h2>
+  <p class="wide"><code>SET NX PX</code>, unique token, compare-and-delete unlock.
+  Everything the docs tell you to do.</p>
+  <p class="cmd">dotnet run 07-expiry.cs</p>
+</section>
+
+<!-- 12 -->
+<section class="slide" data-notes="Every worker held the lock. Updates were lost anyway, silently. Because a distributed lock needs a TTL — you cannot tell 'dead' from 'slow' — and the moment it has a TTL it can expire while you are still working. A GC pause is enough.">
+  <p class="kicker">The reveal</p>
+  <pre>expected counter: 8
+actual counter:   <span class="bad">4</span>
+lost updates:     <span class="bad">4</span></pre>
+  <h3 style="margin-top:1.4rem">Every worker held the lock.</h3>
+  <p class="wide">A lease can expire <span class="accent">while you are still working</span>.
+  A GC pause is enough.</p>
+</section>
+
+<!-- 13 -->
+<section class="slide" data-notes="This is the move the demo earns. 'Get a lock' is not a complete answer to a correctness problem. Transition into the framework.">
+  <div class="rule"></div>
+  <h2>"Get a lock" is not<br>a complete answer.</h2>
+  <p class="dim big">So how do you decide?</p>
+</section>
+
+<!-- 14 -->
+<section class="slide" data-notes="Spend real time here — this is the heart. Get them to sort their OWN current work into question 2's two columns. That exercise is what makes it stick, and it is worth the minute.">
+  <p class="kicker">Before you write any lock</p>
+  <h2>Four questions</h2>
+  <ol>
+    <li>What <span class="accent">invariant</span> am I protecting?</li>
+    <li>What does a <span class="accent">double-run cost</span>?</li>
+    <li>Where does the <span class="accent">side effect</span> land — and is it safe to repeat?</li>
+    <li>What's the <span class="accent">blast radius</span>?</li>
+  </ol>
+</section>
+
+<!-- 15 -->
+<section class="slide" data-notes="Question 2 is the fork everything hangs off. Ask the room to place their own work. Efficiency: a sloppy lock is fine. Correctness: a lock alone is NEVER enough — which is what demo 3 just showed.">
+  <h3>Question 2 is the fork</h3>
+  <table>
+    <tr><th></th><th>Efficiency</th><th>Correctness</th></tr>
+    <tr><td>A double-run costs</td><td>money</td><td>wrong data</td></tr>
+    <tr><td>Sloppy lock OK?</td><td class="good">yes</td><td class="bad">no</td></tr>
+    <tr><td>Is a lock enough?</td><td class="good">yes</td><td class="bad">never, alone</td></tr>
+  </table>
+  <p class="wide dim" style="margin-top:1.6rem">Where does your current work sit?</p>
+</section>
+
+<!-- 16 -->
+<section class="slide" data-notes="Walk it top-down, out loud. Tie steps 4, 5 and 6 back to the three demos BY NAME — they were the evidence for exactly those rows.">
+  <p class="kicker">The tree</p>
+  <pre>1. Can the data store enforce it?          -> no lock
+2. Leaves store, unsafe to repeat?         -> idempotency
+3. Contention structurally avoidable?      -> no lock
+<span class="dim">──────────────────────────────────────────────────</span>
+4. Blast radius?                           <span class="dim">[demo 1]</span>
+5. Is the DB the shared state?             <span class="dim">[demo 2]</span>
+6. Efficiency or correctness?              <span class="dim">[demo 3]</span>
+7. Can the resource reject a stale writer? -> fence
+                                           -> or restructure</pre>
+</section>
+
+<!-- 17 -->
+<section class="slide" data-notes="The line to land. Most people enter at step 4 — 'I need a distributed lock, which one?' The whole job of the framework is to make steps 1 to 3 happen first. In practice most questions terminate at 1 or 2.">
+  <div class="rule"></div>
+  <h2>Most people start<br>at step <span class="accent">4</span>.</h2>
+  <p class="big dim">The job of the framework is to make steps
+  <span class="accent">1, 2 and 3</span> happen first.</p>
+</section>
+
+<!-- 18 -->
+<section class="slide" data-notes="Call the dead end out explicitly. A framework that always produces an answer is lying. Sometimes the honest output is: change the design.">
+  <p class="kicker">Step 7, when the answer is no</p>
+  <h2 class="bad">Stop. Restructure.</h2>
+  <p class="wide">A framework that always produces an answer is lying.
+  Some designs <span class="accent">cannot</span> be made correct with a lock.</p>
+  <p class="wide dim">Go back to 1, 2 or 3 — the three exits.</p>
+</section>
+
+<!-- 19 -->
+<section class="slide" data-notes="Three things to remember. Say them slowly. Number 3 is the one that fixes the opening snippet.">
+  <p class="kicker">Remember three things</p>
+  <ol>
+    <li><b>Name the invariant.</b> If you can't, you don't need a lock — you need to think harder.</li>
+    <li><b>Distributed locks expire while you hold them.</b> Design for it, or don't use one.</li>
+    <li><b>If the side effect leaves your process and cannot be safely repeated,</b> you need idempotency, not mutual exclusion.</li>
+  </ol>
+</section>
+
+<!-- 20 -->
+<section class="slide" data-notes="Come back to the opening snippet. Fix it with an idempotency key on the payment call plus a conditional UPDATE with a rows-affected check. No lock anywhere. Note idempotency is session 3's subject.">
+  <p class="kicker">Back to the opening</p>
+  <h2>Fixed without a lock</h2>
+  <pre>// idempotency key -> the provider dedupes
+await _payments.ChargeAsync(order, key: order.Id);
+
+UPDATE orders SET status = 'paid'
+ WHERE id = @id AND status = 'pending';
+// rows affected = 0 -> someone beat you</pre>
+  <p class="dim">Idempotency in depth: session 3.</p>
+</section>
+
+<!-- 21 -->
+<section class="slide" data-notes="Don't hand-roll it. Ten providers behind one interface. HandleLostToken is the only off-the-shelf answer to 'what if the lock is lost mid-work' — the question demo 3 showed you cannot ignore.">
+  <h3>And don't write it yourself</h3>
+  <h2>madelson/<wbr>DistributedLock</h2>
+  <p class="wide">Ten providers, one interface. <code>HandleLostToken</code> is the only
+  off-the-shelf answer to <span class="accent">"what if the lock is lost mid-work?"</span></p>
+  <pre>"Timeout-based locking approaches such as Redis locks
+ and Azure leases have an inherent risk that an extended
+ hang ... could cause the timeout to expire before the
+ lock can be automatically-renewed."</pre>
+  <p class="dim">— its own documentation</p>
+</section>
+
+<!-- 22 -->
+<section class="slide" data-notes="Close here. Eight things everyone knows about locking, none of which survived checking — including a live documentation bug on Microsoft Learn. This argues for using a checklist better than any assertion could.">
+  <p class="kicker">Closing</p>
+  <h3>Things "everyone knows" that aren't true</h3>
+  <table>
+    <tr><td><code>Lock</code> is ~25% faster</td><td class="dim">no Microsoft source</td></tr>
+    <tr><td>CS9217 blocks async locks</td><td class="bad">MS Learn is wrong</td></tr>
+    <tr><td><code>SemaphoreMaxCountExceeded…</code></td><td class="dim">doesn't exist</td></tr>
+    <tr><td>Advisory locks have no timeout</td><td class="dim">both timeouts apply</td></tr>
+    <tr><td>Named <code>Mutex</code> is machine-wide</td><td class="dim">POSIX-session scoped</td></tr>
+    <tr><td>A pooled advisory lock just stalls</td><td class="bad">silent violation</td></tr>
+    <tr><td>Blob lease ID is a fencing token</td><td class="dim">equality-checked GUID</td></tr>
+  </table>
+  <p class="wide dim" style="margin-top:1.2rem">Intuition <i>and the docs</i> are unreliable here. Use the checklist.</p>
+</section>
+
+<!-- 23 -->
+<section class="slide" data-notes="Where everything lives. FRAMEWORK.md is the bookmark. The lessons are the part that actually sticks.">
+  <div class="rule"></div>
+  <h2>Take this with you</h2>
+  <ul>
+    <li><b>FRAMEWORK.md</b> — the map, the tree, a worked example per branch</li>
+    <li><b>teaching/</b> — six short lessons, ~45 min</li>
+    <li><b>demos/</b> — every number in this talk, runnable</li>
+  </ul>
+  <p class="wide accent" style="margin-top:1.8rem">Next session: Caching.</p>
+</section>
+
+</div>
+
+<footer><span id="pos">1</span> / <span id="tot">23</span></footer>
+<div id="help">← → navigate · n notes · f fullscreen</div>
+<div id="notes"></div>
+
+<script>
+const slides=[...document.querySelectorAll('.slide')];
+const pos=document.getElementById('pos'), tot=document.getElementById('tot');
+const notes=document.getElementById('notes');
+let i=0, showNotes=false;
+tot.textContent=slides.length;
+
+function render(){
+  slides.forEach((s,n)=>s.classList.toggle('on',n===i));
+  pos.textContent=i+1;
+  notes.innerHTML=slides[i].dataset.notes||'<span style="opacity:.5">no notes</span>';
+  location.hash=i+1;
+}
+function go(d){ i=Math.min(slides.length-1,Math.max(0,i+d)); render(); }
+
+addEventListener('keydown',e=>{
+  if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){e.preventDefault();go(1);}
+  else if(e.key==='ArrowLeft'||e.key==='PageUp'){e.preventDefault();go(-1);}
+  else if(e.key==='Home'){i=0;render();}
+  else if(e.key==='End'){i=slides.length-1;render();}
+  else if(e.key==='n'){showNotes=!showNotes;notes.classList.toggle('on',showNotes);}
+  else if(e.key==='f'){document.documentElement.requestFullscreen?.();}
+});
+// Click to advance, but never from content you might legitimately click
+// during a talk -- code blocks, tables, links, or the notes panel.
+addEventListener('click',e=>{
+  if(e.target.closest('#notes, pre, table, a, code')) return;
+  go(1);
+});
+addEventListener('keydown',e=>{ if(e.key==='Escape'&&showNotes){showNotes=false;notes.classList.remove('on');} });
+
+const h=parseInt(location.hash.slice(1),10);
+if(h>0&&h<=slides.length) i=h-1;
+render();
+</script>
+</body>
+</html>

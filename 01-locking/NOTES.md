@@ -1,4 +1,13 @@
-# Session 1 — Locking
+# Locking — speaker's notes
+
+> **This is the deep version — all sections, all mechanisms, ~80 minutes of
+> material.** The talk actually runs 25 minutes: see [`TALK.md`](TALK.md) for
+> the run sheet, and [`FRAMEWORK.md`](FRAMEWORK.md) for the artifact the
+> session exists to teach.
+>
+> Kept in full because it's the source material behind both, and because the
+> per-mechanism detail is worth having when someone asks a question the run
+> sheet doesn't cover.
 
 **Audience:** engineers, mixed seniority, .NET / Postgres / Redis / Azure
 **Length:** 80 min (60-min cut marked below)
@@ -171,14 +180,20 @@ per-session isolation.
 
 ### The demo — one script, four scenarios
 
-`./03-mutex-scope.sh` runs the whole matrix. **Every cell below was
-reproduced on this machine**, and the result corrects what the research
-agent originally reported:
+`./03-mutex-scope.sh` runs the Linux half. **Every row below was reproduced
+on this machine** — Linux/WSL2 and, via interop, real Windows:
 
-| | unprefixed name | `Global\` prefix |
-|---|---|---|
-| different POSIX session | ACQUIRED — no contention | **BLOCKED** |
-| container sharing `/tmp` | ACQUIRED — no contention | **BLOCKED** |
+| Holder | Contender | Name | Result |
+|---|---|---|---|
+| Linux | Linux, **same** POSIX session | unprefixed | **BLOCKED** |
+| Linux | Linux, **different** POSIX session | unprefixed | acquired — no contention |
+| Linux | Linux, different POSIX session | `Global\` | **BLOCKED** |
+| Linux | container, `/tmp` **not** shared | unprefixed | acquired — no contention |
+| Linux | container, `/tmp` shared | unprefixed | acquired — no contention |
+| Linux | container, `/tmp` shared | `Global\` | **BLOCKED** |
+| Windows | Windows, same session | unprefixed | **BLOCKED** |
+| Windows | WSL | unprefixed | acquired — no contention |
+| Windows | WSL | `Global\` | acquired — no contention |
 
 Because on Unix .NET backs named mutexes with *files*:
 
@@ -198,9 +213,35 @@ finds nothing. Crossing the container boundary takes **both** a shared
 you run it — nearly everyone gets it wrong, including, it turns out,
 confident-sounding research.
 
-**"Cross-process" is not "cross-machine", and on Unix it isn't even
-"cross-session".** A lock's scope is the scope of the thing implementing
-it. That sentence sets up the entire second half of the talk.
+### Windows is the same trap by a different mechanism
+
+Windows named mutexes are **kernel objects**, not files. But the prefix rule
+is the same shape: unprefixed means `Local\`, which is scoped to the
+**Terminal Services session**.
+
+The practical consequence, which the docs imply but don't spell out: a
+Windows **service runs in session 0** and an interactive user in session 1+.
+So a service and a desktop app using the same unprefixed name **do not
+contend** — structurally the identical bug to the Unix one, for a completely
+different reason. Creating a `Global\` object on Windows also generally needs
+no special privilege — the `SeCreateGlobalPrivilege` requirement covers
+file-mapping and symbolic-link objects only, not mutexes.
+
+### And the one that will actually bite this team
+
+**A WSL process and a Windows process never share a named mutex — not even
+with `Global\`.** Verified both ways. The implementations have nothing in
+common (kernel objects vs `/tmp` files), and WSL2 is a separate VM anyway.
+
+So if anyone develops in WSL and deploys to Windows, or the reverse:
+*"it worked on my machine"* carries **zero** information about the locking
+behaviour of the deployed thing. Worth saying out loud to a room that does
+exactly this.
+
+**"Cross-process" is not "cross-machine", on Unix it isn't even
+"cross-session", and across the WSL boundary it is nothing at all.** A lock's
+scope is the scope of the thing implementing it. That sentence sets up the
+entire second half of the talk.
 
 ### Abandonment is unreliable here too
 
@@ -270,9 +311,19 @@ FOR UPDATE SKIP LOCKED
 LIMIT 1;
 ```
 
-N workers, no coordinator, no lock service, no duplicate delivery. This is
-the Competing Consumer session in one keyword — plant the flag here and
-tell them it's the follow-up.
+N workers, no coordinator, no lock service, no duplicate delivery.
+
+`05-pg-skip-locked.cs` measures it — 12 jobs, 4 workers:
+
+| | wall clock | duplicates |
+|---|---|---|
+| `FOR UPDATE SKIP LOCKED` | **412 ms** | 0 |
+| plain `FOR UPDATE` | 1506 ms | 0 |
+
+Both correct. The plain version is 3.6x slower purely because the workers
+queue behind each other instead of taking different rows. This is the
+Competing Consumer session in one keyword — plant the flag and tell them
+it's the follow-up.
 
 ### 3.3 Advisory locks — lock an arbitrary key, no row required
 
@@ -306,41 +357,80 @@ idiom. **`hashtext()` returns `integer`, not `bigint`** — so you get 2³², no
 about **77,000 keys**. Two unrelated keys silently serialising, surfacing
 as latency nobody can explain. Use the two-int form and namespace it.
 
-### 3.4 The PgBouncer leak — demo this, it's the best gotcha in the talk
+### 3.4 The pooling leak — demo this, it's the best gotcha in the talk
 
 **Default to `pg_advisory_xact_lock`.** Two reasons; the second is the one
 that reaches production.
 
 1. Session locks are *stackable* — acquire twice, unlock twice. Easy to
    leak by one.
-2. Session locks ride the pooled connection.
+2. Session locks ride the pooled connection, and **under EF Core you do not
+   own the connection — the pool does.**
 
-PgBouncer's own feature matrix is blunt about it. Note it has exactly **two**
-mode columns — Session and Transaction, no Statement column (summaries
-routinely invent one) — and the row reads:
+`10-efcore-pooling.cs`. No PgBouncer, no exotic configuration: EF Core on
+Npgsql's pool, which is on by default.
 
 ```
-Session-level advisory locks    |  Yes  |  Never
+request 1: took pg_advisory_lock(101)
+           connection state right after: Closed      <-- already back in the pool
+request 1: DbContext disposed
+   server still holds it: 1
+request 2: pg_try_advisory_lock(101) -> TRUE
+           ^ two requests, same lock, both told they hold it.
 ```
 
-The word *session-level* is deliberate: transaction-scoped advisory locks
-are not listed as broken.
+**The detail that makes this worse than it looks:** EF Core closes the
+connection *immediately after the statement*. You don't have to reach the end
+of the request or dispose the `DbContext` — a single `ExecuteSqlRaw` is enough
+to hand a lock-holding connection back to the pool.
 
-**And the failure is worse than "the lock leaks", which is what everyone
-assumes.** Reproduced end to end:
+Explicitly opening the connection doesn't save you (scenario 2) — it changes
+*when* it leaks, not *whether*.
 
-1. Client A takes `pg_advisory_lock(7777)` through transaction-mode PgBouncer, then disconnects
-2. The lock stays held on backend pid 93
-3. Client B lands on **that same backend** and calls `pg_try_advisory_lock(7777)`
-4. It returns **`true`** — because session locks are stackable and the backend already holds it
+Scenario 3 is the fix: `pg_advisory_xact_lock` inside an explicit
+`BeginTransactionAsync()` → released on commit, every time.
 
-Mutual exclusion is silently violated. **No error. No log line.** And clients
-that land on a *different* backend hang instead — the same bug presenting as
-the opposite symptom, which is why it's so hard to diagnose from a ticket.
+**The rule, in one line:**
 
-**The config trap that hides it:** `server_reset_query` still *reads* as
-`DISCARD ALL` via `SHOW CONFIG` in transaction mode — it just never runs.
-Auditing the config tells you you're safe when you aren't.
+> For request-scoped work: `pg_advisory_xact_lock` inside an explicit
+> transaction. Never `pg_advisory_lock` on a pooled connection.
+
+A session-scoped advisory lock is bound to the **connection**. Your
+`DbContext` is scoped to a request; the connection underneath it is not.
+
+### But session-scoped locks are not a mistake — they have a proper use
+
+The blanket "never `pg_advisory_lock`" is wrong, and someone in the room will
+say so. Holding a lock for the lifetime of a **process** is a real pattern:
+leader election, singleton daemon, "only one node runs this."
+
+There the connection-scoped behaviour is exactly what you want — the process
+dies, its connection drops, the lock releases, another node takes over. No
+TTL, no renewal, no clock. The connection *is* the liveness signal.
+
+**Marten's async daemon is the concrete .NET example.** `HotCold` mode elects
+a leader per projection per tenant database so each runs on exactly one
+process. Its default is `pg_try_advisory_xact_lock` holding a long-lived
+*transaction* open for as long as the node leads (session-scoped is
+configurable), and it parks `SELECT pg_catalog.pg_sleep(60)` on that
+connection to detect a database restart or failover — the same parked-query
+trick `DistributedLock` uses for `HandleLostToken`.
+
+**The distinction is the connection, not the function name:**
+
+| | Use |
+|---|---|
+| Request-scoped work | `pg_advisory_xact_lock`, short transaction |
+| Process-lifetime ownership | advisory lock on a **dedicated** connection |
+
+Neither belongs on a pooled connection serving requests.
+
+> **If you ever adopt PgBouncer**, the same bug exists one layer lower and is
+> harder to see — its own feature matrix lists `Session-level advisory locks |
+> Yes | Never`, and `server_reset_query` still *reads* as `DISCARD ALL` via
+> `SHOW CONFIG` in transaction mode while never running. Details in
+> [`research/02`](research/02-pg-advisory-locks-and-pgbouncer.md). Not
+> presented — we don't run it.
 
 ### 3.4b Make the locks visible
 
@@ -571,25 +661,27 @@ existing repo stays as-is (it still works); this becomes the new demo set.
 
 ```
 01-locking/demos/
-  apphost.cs           Aspire AppHost — Postgres + PgBouncer + Redis
+  apphost.cs           Aspire AppHost — Postgres + Redis
   01-counter.cs        race → Interlocked → lock          §1
   02-async-lock.cs     lock+await won't compile; SemaphoreSlim traps  §1
   03-mutex-a.cs        named Mutex, holder                §1b
   03-mutex-b.cs        named Mutex, contender             §1b
+  03-mutex-scope.sh    driver: 4 scenarios, session + container       §1b
+  connection.cs        shared connection strings (#:include)
   04-pg-advisory.cs    session vs xact; pg_locks visibility           §3.3
-  04b-pgbouncer-leak.cs  two clients, one backend, both "hold" the lock  §3.4
+  10-efcore-pooling.cs EF Core leaks a session advisory lock       §3.4
   05-pg-skip-locked.cs FOR UPDATE SKIP LOCKED as a queue  §3.2
   06-redis-lock.cs     SET NX PX + Lua unlock; --naive shows the DEL bug  §4
   07-expiry.cs         sleep past the TTL → two holders → corruption  §4
 ```
 
-Ten files, no projects. `03-mutex-a/b` stay as a pair because the whole
+Twelve files, no projects. `03-mutex-a/b` stay as a pair because the whole
 point is two OS processes.
 
 ### How they run on stage
 
 ```sh
-aspire run                    # once, up front — PG + PgBouncer + Redis
+aspire run                    # once, up front — Postgres + Redis
 dotnet run 01-counter.cs      # then one of these per section
 dotnet run 06-redis-lock.cs --naive
 ```
@@ -606,11 +698,10 @@ stage setup.)*
 
 ### The two to build first
 
-`04b-pgbouncer-leak.cs` — because it's the finding the room will least
-expect, and it needs PgBouncer in *transaction* pooling mode in the AppHost
-to reproduce. Pin the pool to a single backend so both clients land on it
-deterministically; otherwise the demo shows the hang instead of the silent
-violation, and the hang is the less interesting half.
+`10-efcore-pooling.cs` — because it's the finding the room will least expect
+and it's their own stack. No PgBouncer, no special configuration: EF Core on
+Npgsql's default pool. Set `Maximum Pool Size=1` so the second request
+deterministically draws the same connection.
 
 `07-expiry.cs` — same shape as `01-counter.cs`, a shared counter and a race,
 except the race is now *across the TTL boundary*. The lock is held, correctly,

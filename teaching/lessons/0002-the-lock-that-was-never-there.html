@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 2 — The lock that was never there</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+
+<p class="eyebrow">Locking · Lesson 2 · ~8 minutes</p>
+<h1>The lock that was never there</h1>
+<p class="standfirst">Two ways to write a Postgres advisory lock in EF Core that
+look right, compile, run, log nothing — and protect nothing.</p>
+
+<h2>The knowledge</h2>
+
+<p>Postgres gives you a lock on any number you like, no row required. Perfect
+for <em>"only one import per tenant at a time."</em> There are two flavours, and
+the difference is the whole lesson:</p>
+
+<table>
+  <thead><tr><th>Function</th><th>Scope</th><th>Released by</th></tr></thead>
+  <tbody>
+    <tr><td><code>pg_advisory_lock(k)</code></td><td>the <strong>session</strong></td><td>an explicit unlock, or the connection closing</td></tr>
+    <tr><td><code>pg_advisory_xact_lock(k)</code></td><td>the <strong>transaction</strong></td><td>commit or rollback. Always</td></tr>
+  </tbody>
+</table>
+
+<p>A session is <strong>a database connection</strong>. And here is the thing
+that catches everyone:</p>
+
+<div class="callout">
+  <span class="label">The trap</span>
+  <p>Under EF Core, <strong>you do not own the connection — the pool does.</strong>
+  Your <code>DbContext</code> is scoped to a request. The connection underneath
+  it is not.</p>
+</div>
+
+<h3>Failure one: the lock outlives the request</h3>
+
+<p>EF Core closes the connection <em>immediately after the statement</em>. It
+goes back to the pool still holding your lock, and the next request that draws
+it is <strong>told it acquired the lock too</strong>. Measured:</p>
+
+<pre><code>after request 1 disposed           : 1 lock on server
+after request 2 opened (no cmd yet): 1 lock on server
+request 2 pg_try_advisory_lock     : True     <-- both hold it</code></pre>
+
+<p>No exception. No log line. Session-scoped locks are <em>stackable</em>, so
+re-acquiring on a connection that already holds it simply succeeds.</p>
+
+<h3>Failure two: the lock that never existed</h3>
+
+<p>So you switch to <code>pg_advisory_xact_lock</code>. But if there is no
+<strong>explicit</strong> transaction, EF runs your statement in autocommit — a
+transaction that begins and ends with that one statement. The lock is taken and
+released in the same breath:</p>
+
+<pre><code>xact_lock, no explicit tx -> locks held after statement: 0</code></pre>
+
+<p>You have no lock at all, and nothing tells you. This one is worse than the
+leak, because the leak at least serialises something.</p>
+
+<div class="callout">
+  <span class="label">The rule</span>
+  <p><code>pg_advisory_xact_lock</code>, <strong>inside an explicit
+  <code>BeginTransactionAsync()</code></strong>. Both halves are load-bearing.</p>
+</div>
+
+<h2>The practice</h2>
+
+<p>Each of these is a plausible thing to find in a pull request. Does it protect
+the invariant its author intended?</p>
+
+<div id="q"></div>
+
+<h2>What to take away</h2>
+
+<p>The scope of an advisory lock is the scope of the <strong>connection</strong>,
+not the scope of your code. Two questions settle every case:</p>
+
+<ol>
+  <li>Who owns this connection — me, or a pool?</li>
+  <li>Is there an explicit transaction around the lock and the work?</li>
+</ol>
+
+<p>And note what the rule is <em>not</em>: session-scoped locks are not a
+mistake. They are exactly right when you want to hold something for the lifetime
+of a <em>process</em> — leader election, a singleton daemon — on a dedicated
+connection you own. <a href="https://martendb.io/events/projections/async-daemon.html">Marten's
+async daemon</a> elects its projection leader this way.</p>
+
+<div class="source">
+  <span class="label">Read this next</span>
+  <p><a href="https://www.postgresql.org/docs/current/explicit-locking.html#ADVISORY-LOCKS">PostgreSQL
+  — Advisory Locks</a>. Two screens, and the only primary source you need. Note
+  the sentence about locks being held until released or the session ends: that
+  sentence is the entire bug.</p>
+  <p>Then run it yourself: <code>dotnet run 10-efcore-pooling.cs</code> in
+  <code>01-locking/demos</code>.</p>
+</div>
+
+<div class="ask">
+  <strong>Think one of these answers is wrong?</strong> Say so — every claim here
+  was measured against a real Postgres, and your agent can show you the script.
+</div>
+
+<nav class="lesson-nav">
+  <a href="0001-efficiency-or-correctness.html">← Lesson 1</a>
+  <a href="0003-name-the-invariant.html">Lesson 3 →</a>
+  <a href="../index.html">All lessons</a>
+</nav>
+
+<script src="../assets/quiz.js"></script>
+<script>
+Quiz.sort({
+  mount: '#q',
+  buckets: ['Works', 'Broken'],
+  items: [
+    { text: 'A request handler calls ExecuteSqlRawAsync("select pg_advisory_lock(42)"), does the work, and returns.',
+      answer: 'Broken',
+      why: 'The connection returns to the pool still holding the lock, and the next request that draws it is told it acquired the same lock. Nothing is ever released and nothing errors.' },
+
+    { text: 'A handler opens BeginTransactionAsync, calls pg_advisory_xact_lock(42), does the work, commits.',
+      answer: 'Works',
+      why: 'The lock is bound to the transaction, so commit or rollback always releases it. This is the shape you want in a request path.' },
+
+    { text: 'A handler calls ExecuteSqlRawAsync("select pg_advisory_xact_lock(42)") and then does the work.',
+      answer: 'Broken',
+      why: 'No explicit transaction, so the statement runs in autocommit and the lock is released the instant it returns. Measured: zero locks held afterwards. You have no lock at all.' },
+
+    { text: 'A handler calls OpenConnectionAsync, takes pg_advisory_lock(42), does the work, then CloseConnectionAsync.',
+      answer: 'Broken',
+      why: 'Holding the connection open changes WHEN it leaks, not whether. Close returns it to the pool with the lock still held; only a real disconnect releases a session lock.' },
+
+    { text: 'A background service holds its own dedicated connection for its lifetime and takes pg_advisory_lock(42) to elect itself leader.',
+      answer: 'Works',
+      why: 'The legitimate use of session scope. The connection is owned, not borrowed, and if the process dies the connection drops and the lock releases — that IS the liveness signal.' },
+
+    { text: 'A handler opens a transaction and does SELECT ... FOR UPDATE on an existing order row before updating it.',
+      answer: 'Works',
+      why: 'A row lock is transaction-scoped, so it commits or rolls back with the work. When the row already exists this is the better default — no key to hash and no scope to get wrong.' }
+  ]
+});
+</script>
+</body>
+</html>

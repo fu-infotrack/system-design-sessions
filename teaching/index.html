@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Locking — the course</title>
+<link rel="stylesheet" href="assets/lesson.css">
+<style>
+  .card { display: grid; grid-template-columns: 2rem 1fr auto; gap: .9rem;
+          padding: .9rem 0; border-bottom: 1px solid var(--rule); align-items: baseline; }
+  .card .n { font: 700 1.1rem/1 ui-sans-serif, system-ui, sans-serif; color: var(--accent); }
+  .card .t { font-weight: 600; font-size: 1.05rem; }
+  .card .d { color: var(--ink-soft); font-size: .93rem; display: block; margin-top: .2rem; }
+  .card .m { color: var(--ink-soft); font-size: .8rem; white-space: nowrap;
+             font-family: ui-sans-serif, system-ui, sans-serif; }
+  a.card { text-decoration: none; color: inherit; }
+  a.card:hover .t { color: var(--accent); }
+</style>
+</head>
+<body>
+
+<p class="eyebrow">Six lessons · about 45 minutes total</p>
+<h1>Locking</h1>
+<p class="standfirst">Not a tour of mechanisms — a way of deciding. Work through
+them in order; each is short and gives one thing you can use immediately.</p>
+
+<a class="card" href="lessons/0001-efficiency-or-correctness.html">
+  <span class="n">1</span>
+  <span><span class="t">Efficiency or correctness?</span>
+  <span class="d">One question, asked before you pick a lock, that decides everything downstream.</span></span>
+  <span class="m">7 min</span>
+</a>
+
+<a class="card" href="lessons/0002-the-lock-that-was-never-there.html">
+  <span class="n">2</span>
+  <span><span class="t">The lock that was never there</span>
+  <span class="d">Two ways to write an advisory lock in EF Core that compile, run, log nothing, and protect nothing.</span></span>
+  <span class="m">8 min</span>
+</a>
+
+<a class="card" href="lessons/0003-name-the-invariant.html">
+  <span class="n">3</span>
+  <span><span class="t">Name the invariant</span>
+  <span class="d">The question to ask in review, and why most answers to it are the wrong kind of sentence.</span></span>
+  <span class="m">6 min</span>
+</a>
+
+<a class="card" href="lessons/0004-when-a-lock-cannot-help.html">
+  <span class="n">4</span>
+  <span><span class="t">When a lock cannot help</span>
+  <span class="d">The class of problem where no lock, however correct, prevents what you are worried about.</span></span>
+  <span class="m">7 min</span>
+</a>
+
+<a class="card" href="lessons/0005-every-lease-expires.html">
+  <span class="n">5</span>
+  <span><span class="t">Every lease expires while you hold it</span>
+  <span class="d">You are already using several of these, and most of them are not called locks.</span></span>
+  <span class="m">8 min</span>
+</a>
+
+<a class="card" href="lessons/0006-walking-the-tree.html">
+  <span class="n">6</span>
+  <span><span class="t">Walking the tree</span>
+  <span class="d">Capstone. No new material — just whether you can use what you have.</span></span>
+  <span class="m">9 min</span>
+</a>
+
+<h2>Keep</h2>
+
+<p><a href="reference/decision-tree.html"><strong>The decision card</strong></a> —
+one page, built to print. The seven questions, the anti-patterns table, and the
+leases you already have. Designed to be read in the ten seconds before you write
+a lock.</p>
+
+<p><a href="GLOSSARY.md">Glossary</a> · <a href="../01-locking/FRAMEWORK.md">The
+full framework</a> · <a href="RESOURCES.md">Primary sources</a></p>
+
+<div class="ask">
+  Every claim in these lessons is either cited to a primary source or measured
+  against real infrastructure — the scripts are in
+  <code>01-locking/demos</code>. If something looks wrong, it might be. Say so.
+</div>
+
+</body>
+</html>

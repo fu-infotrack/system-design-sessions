@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 5 — Every lease expires while you hold it</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+
+<p class="eyebrow">Locking · Lesson 5 · ~8 minutes</p>
+<h1>Every lease expires while you hold it</h1>
+<p class="standfirst">You are already using several of these, and most of them
+are not called locks.</p>
+
+<h2>The knowledge</h2>
+
+<p>Any lock that survives the death of its holder needs a time limit — otherwise
+a crashed process would hold it forever. And the moment it has a time limit:</p>
+
+<div class="callout">
+  <span class="label">The core idea</span>
+  <p><strong>It can expire while you are still working.</strong> Not because
+  anything went wrong — just because your work took longer than the number. A
+  garbage-collection pause is enough.</p>
+</div>
+
+<p>Then someone else acquires it, legitimately, and now two of you are running.
+Neither is told. Our demo does exactly this with a textbook-correct Redis lock:</p>
+
+<pre><code>dotnet run 07-expiry.cs
+
+expected counter: 8
+actual counter:   4
+lost updates:     4</code></pre>
+
+<h3>The category is much bigger than "locks"</h3>
+
+<p>Here is the part worth taking away. <strong>Any system that hands you work
+with a timeout and reassigns it if you do not confirm in time is a lease</strong>
+— and has this failure. You probably meet it in a queue long before a lock:</p>
+
+<div class="scroll-x">
+<table>
+  <thead><tr><th>System</th><th>The lease</th><th>Default</th></tr></thead>
+  <tbody>
+    <tr><td>Azure Service Bus peek-lock</td><td><code>LockDuration</code></td><td>1 min, max 5</td></tr>
+    <tr><td>Kafka partition ownership</td><td><code>max.poll.interval.ms</code></td><td>5 min</td></tr>
+    <tr><td>Redis lock (DistributedLock)</td><td>key TTL</td><td>30 s</td></tr>
+    <tr><td>Azure blob lease</td><td><code>Duration</code></td><td>30 s</td></tr>
+    <tr><td>AWS SQS</td><td>visibility timeout</td><td>check yours</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>Microsoft's own Service Bus documentation describes the failure without
+euphemism, and draws the conclusion this course keeps arriving at:</p>
+
+<blockquote>
+  If <code>Complete</code> fails, which typically occurs at the very end of message
+  handling and in some cases after minutes of processing work, the receiving
+  application can decide whether to preserve the state of the work and ignore the
+  same message when it's delivered for a second time… Designing for idempotent
+  message handling becomes critical.
+  <cite>— <a href="https://learn.microsoft.com/en-us/azure/service-bus-messaging/message-transfers-locks-settlement">Microsoft Learn, Service Bus locks and settlement</a></cite>
+</blockquote>
+
+<h3>The trap everyone falls into</h3>
+
+<p>Processing is slow, so you raise the timeout. But Service Bus spells out the
+cost: <em>"when your client stops working, the message becomes available again
+only after the lock duration passes."</em></p>
+
+<p>So a longer lease means slower recovery from a genuinely dead worker, and a
+shorter one means more zombies. <strong>You are choosing between duplicate work
+and delayed work, and no number escapes the choice.</strong> Renewal — Service
+Bus auto-renew, Kafka's background heartbeat — narrows the window without
+closing it, because the renewal and the work stop at different moments.</p>
+
+<h2>The practice</h2>
+
+<div id="q1"></div>
+
+<h3>And one about what to do</h3>
+
+<div id="q2"></div>
+
+<h2>What to take away</h2>
+
+<p>Two habits:</p>
+
+<ol>
+  <li>When you see a timeout on something that hands you work, <strong>read it as
+  a lock you did not know you had</strong>, and find out what happens if your
+  handler overruns it.</li>
+  <li>Never answer that risk with a bigger number. Answer it by making the second
+  run harmless.</li>
+</ol>
+
+<div class="source">
+  <span class="label">Read this next</span>
+  <p><a href="https://learn.microsoft.com/en-us/azure/service-bus-messaging/message-transfers-locks-settlement">Service
+  Bus — message transfers, locks and settlement</a>. Ten minutes, and it is about
+  the lease you are most likely to already depend on. The list of ways a lock can
+  be lost <em>without</em> you overrunning it is the part to read twice.</p>
+</div>
+
+<div class="ask">
+  <strong>Worth doing for real:</strong> ask your agent to help you find the
+  lease timeouts in our own configuration, and work out which handlers could
+  exceed them.
+</div>
+
+<nav class="lesson-nav">
+  <a href="0004-when-a-lock-cannot-help.html">← Lesson 4</a>
+  <a href="0006-walking-the-tree.html">Lesson 6 →</a>
+  <a href="../reference/decision-tree.html">Reference card</a>
+</nav>
+
+<script src="../assets/quiz.js"></script>
+<script>
+Quiz.sort({
+  mount: '#q1',
+  buckets: ['Is a lease', 'Is not one'],
+  items: [
+    { text: 'A Service Bus handler takes 90 seconds on a queue left at default settings.',
+      answer: 'Is a lease',
+      why: 'LockDuration defaults to 1 minute, so the lock lapsed 30 seconds before you finished — the message went back to the front of the queue and someone else may already be processing it. Complete will then fail with MessageLockLostException.' },
+    { text: 'SELECT ... FOR UPDATE on a row, inside a transaction that takes 90 seconds.',
+      answer: 'Is not one',
+      why: 'A row lock has no clock. It is held until the transaction ends, however long that takes. It can still be lost if something kills your session, but slow work alone will never release it.' },
+    { text: 'A Kafka consumer whose handler occasionally takes six minutes.',
+      answer: 'Is a lease',
+      why: 'max.poll.interval.ms defaults to five minutes. The background thread leaves the group while your application thread keeps working, the partition is reassigned, and your eventual commit is rejected — after the work is already done.' },
+    { text: 'A named Mutex held by a desktop process that hangs for an hour.',
+      answer: 'Is not one',
+      why: 'An OS kernel object with no expiry. It is released when the process dies or the handle closes, never on a timer — which is why it deadlocks rather than double-runs.' },
+    { text: 'A Kubernetes CronJob whose pod is still running when the next schedule fires.',
+      answer: 'Is not one',
+      why: 'A deliberate near-miss: this is an overlap problem, not a lease. Nothing was reassigned and no ownership expired — the scheduler simply started a second one. concurrencyPolicy is the knob, not a timeout.' }
+  ]
+});
+
+Quiz.choice({
+  mount: '#q2',
+  items: [
+    { text: 'A Service Bus handler overruns its lock about once a week, causing duplicate work. What is the best first move?',
+      options: [
+        'Raise LockDuration to the maximum of five minutes',
+        'Enable auto lock renewal so the lock is never lost',
+        'Make the handler safe to run twice, then tune if needed',
+        'Move the work to a Redis lock with a longer expiry'
+      ],
+      answer: 'Make the handler safe to run twice, then tune if needed',
+      why: 'The first three trade one failure for another: a longer lease delays recovery from dead workers, renewal narrows the window without closing it, and a different lock technology has the identical problem. Only the third removes the consequence. Tuning afterwards is fine — it just should not be the thing you rely on.' }
+  ]
+});
+</script>
+</body>
+</html>

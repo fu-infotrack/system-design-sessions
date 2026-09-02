@@ -17,6 +17,25 @@
 >
 > The file's core finding — that unprefixed names are POSIX-session scoped —
 > is confirmed, and is the reason the `/tmp` mount alone does nothing.
+>
+> ### Windows, now verified rather than documented (2026-08-26)
+>
+> §9's Windows material was documentation-only. Tested against a real Windows
+> SDK 10.0.400 via WSL interop:
+>
+> | Holder | Contender | Name | Result |
+> |---|---|---|---|
+> | Windows | Windows, same session | unprefixed | **BLOCKED** |
+> | Windows | WSL | unprefixed | acquired — no contention |
+> | Windows | WSL | `Global\` | acquired — no contention |
+>
+> Windows-to-Windows contention works as documented. **WSL and Windows never
+> share a named mutex, `Global\` included** — different implementations, and
+> WSL2 is a separate VM.
+>
+> Still documentation-only, not tested: Windows contention *across* Terminal
+> Services sessions (needs a service or a second RDP session), and
+> `AbandonedMutexException` on Windows.
 
 
 ## Summary
@@ -381,7 +400,10 @@ Source: <https://learn.microsoft.com/en-us/dotnet/api/system.threading.mutex>
 Practical Windows implications the docs imply but don't spell out: a Windows **service** runs in session 0
 while an interactive user runs in session 1+, so unprefixed names do not bridge them — structurally the
 same trap as §8, for a different reason. Creating a `Global\` object on Windows also generally requires
-the `SeCreateGlobalPrivilege`. Windows object names are also limited to `MAX_PATH` (260) characters.
+**no special privilege** — verified 2026-08-27 against the kernel-object-namespaces doc, which
+limits `SeCreateGlobalPrivilege` to *"a file-mapping object or symbolic link object"* and states
+*"The privilege check is limited to the creation of these objects"*. Mutexes, events, semaphores and
+waitable timers are not covered. Windows object names are limited to `MAX_PATH` (260) characters.
 See also <https://learn.microsoft.com/en-us/windows/win32/sync/object-names>.
 
 ### 10. `AbandonedMutexException` — and the case where it silently doesn't fire
@@ -530,7 +552,7 @@ specifically — where by definition there *is* no other holder — **you will n
   the same there — is from source reading only.
 - **Whether the lost-abandonment behaviour is considered a bug or by design.** I did not find a tracking
   issue for it. It follows directly from the documented lifetime scheme, but I am inferring the intent.
-- **Windows-side claims in §9 beyond the quoted docs** — specifically that `SeCreateGlobalPrivilege` is
+- ~~**Windows-side claims in §9 beyond the quoted docs** — specifically that `SeCreateGlobalPrivilege` is~~ **RESOLVED 2026-08-27: the claim was wrong; corrected above.** Originally:
   required for `Global\` and the `MAX_PATH` name limit — come from the Win32 object-names documentation and
   were **not** tested; no Windows machine was available.
 - **`GetCurrentSessionId` on macOS.** I confirmed `gSID = getsid(gPID)` in `pal.cpp` for the Unix build but

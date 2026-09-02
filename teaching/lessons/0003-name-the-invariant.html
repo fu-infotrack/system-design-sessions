@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 3 — Name the invariant</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+
+<p class="eyebrow">Locking · Lesson 3 · ~6 minutes</p>
+<h1>Name the invariant</h1>
+<p class="standfirst">The question to ask in code review, and why most answers
+to it are the wrong kind of sentence.</p>
+
+<h2>The knowledge</h2>
+
+<p>An <strong>invariant</strong> is something that must stay true about your data
+or the world, no matter how many things run at once.</p>
+
+<p>When someone adds a lock, ask what it protects. You will get one of two kinds
+of answer, and they are not equally useful:</p>
+
+<table>
+  <thead><tr><th>An invariant</th><th>A symptom</th></tr></thead>
+  <tbody>
+    <tr><td>"A card is charged once per order"</td><td>"Two threads shouldn't run this method"</td></tr>
+    <tr><td>"A room has no overlapping bookings"</td><td>"There's a race here"</td></tr>
+    <tr><td>"A customer has one active subscription"</td><td>"It breaks under load"</td></tr>
+  </tbody>
+</table>
+
+<p>The left column describes <strong>the world</strong>. The right column
+describes <strong>your code</strong>. That difference decides what you can do
+next:</p>
+
+<div class="callout">
+  <span class="label">Why it matters</span>
+  <p>An invariant can be enforced somewhere other than a lock — a unique index,
+  a version check, a routing decision. A symptom can only be defended against.
+  <strong>If you cannot name the invariant, a lock is a guess.</strong></p>
+</div>
+
+<h3>The test</h3>
+
+<p>A good invariant survives this question: <em>could someone violate this
+without running my code at all?</em></p>
+
+<p>"A customer has one active subscription" survives — a migration or a manual
+`INSERT` could break it, which tells you the database should hold the rule. "Two
+threads shouldn't run this method" does not survive; it is not a fact about
+anything, and there is nowhere to put it but a lock.</p>
+
+<h2>The practice</h2>
+
+<p>For each pull request comment, is the stated reason an invariant or a symptom?</p>
+
+<div id="q1"></div>
+
+<h3>Now name one yourself</h3>
+
+<p>A colleague wraps this in a distributed lock:</p>
+
+<pre><code>var draft = await db.Invoices.SingleAsync(i =&gt; i.Id == id);
+draft.Number = await NextNumberForTenant(draft.TenantId);
+await db.SaveChangesAsync();</code></pre>
+
+<p>What is the invariant?</p>
+
+<div id="q2"></div>
+
+<h2>What to take away</h2>
+
+<p>Three words, in review: <strong>"protecting what, exactly?"</strong></p>
+
+<p>If the answer is a property of the data, you have options — and lesson 4 and
+the framework will give you several better than a lock. If the answer is a
+property of the code, push back before the lock goes in: the design is not
+understood yet, and a lock will preserve the misunderstanding rather than fix it.</p>
+
+<div class="source">
+  <span class="label">Read this next</span>
+  <p>The <a href="../../01-locking/FRAMEWORK.md">framework's eight questions</a>
+  — this lesson is question 1, and the other seven only make sense once it is
+  answered.</p>
+</div>
+
+<div class="ask">
+  <strong>Got a lock in our codebase you cannot name the invariant for?</strong>
+  Bring it to your agent. That is the most useful thing you can do with this lesson.
+</div>
+
+<nav class="lesson-nav">
+  <a href="0002-the-lock-that-was-never-there.html">← Lesson 2</a>
+  <a href="0004-when-a-lock-cannot-help.html">Lesson 4 →</a>
+  <a href="../GLOSSARY.md">Glossary</a>
+</nav>
+
+<script src="../assets/quiz.js"></script>
+<script>
+Quiz.sort({
+  mount: '#q1',
+  buckets: ['Invariant', 'Symptom'],
+  items: [
+    { text: '"Locking here because two requests can both mark the order as paid."',
+      answer: 'Symptom',
+      why: 'It describes what the code does, not what must be true. Push one level further and you get the invariant: an order is paid once. That version has other solutions — a status check in the UPDATE, for instance.' },
+    { text: '"Locking here so a tenant never has two imports running at the same time."',
+      answer: 'Invariant',
+      why: 'A fact about the world that holds regardless of your code. Nameable, so it is enforceable — and this one is a genuine advisory-lock case, because there is no row to lock.' },
+    { text: '"Adding a lock because this endpoint is flaky under load testing."',
+      answer: 'Symptom',
+      why: 'Flakiness is evidence, not a specification. A lock here freezes the symptom in place and the actual invariant stays unidentified — so nobody can tell later whether the lock is still needed.' },
+    { text: '"Locking so a document version number is never reused."',
+      answer: 'Invariant',
+      why: 'A property of the data, and a very enforceable one — a unique constraint on (document, version) holds it against every writer, including ones that never take your lock.' },
+    { text: '"We lock because the previous team locked here and removing it felt risky."',
+      answer: 'Symptom',
+      why: 'Not even a symptom of a race, just of missing knowledge. This is the most common kind in a mature codebase, and the honest response is to find the invariant before touching anything.' }
+  ]
+});
+
+Quiz.choice({
+  mount: '#q2',
+  items: [
+    { text: 'Pick the best statement of what the lock is protecting.',
+      options: [
+        'Two requests must not run NextNumberForTenant at the same time',
+        'Each tenant issues each invoice number to at most one invoice',
+        'The invoice table must not be written by two connections',
+        'SaveChangesAsync must complete before another request starts'
+      ],
+      answer: 'Each tenant issues each invoice number to at most one invoice',
+      why: 'It is the only option that describes the data rather than the execution. And once phrased that way the better fix is visible: a unique index on (TenantId, Number) enforces it against every writer, with the lock as at most an optimisation.' }
+  ]
+});
+</script>
+</body>
+</html>

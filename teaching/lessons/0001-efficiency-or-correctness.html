@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 1 — Efficiency or correctness?</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+
+<p class="eyebrow">Locking · Lesson 1 · ~7 minutes</p>
+<h1>Efficiency or correctness?</h1>
+<p class="standfirst">One question, asked before you pick a lock, that decides
+everything downstream.</p>
+
+<h2>The knowledge</h2>
+
+<p>When you reach for a lock, you are protecting an <strong>invariant</strong> —
+a property that must stay true no matter how many things run at once. Before
+choosing <em>how</em> to protect it, answer one question:</p>
+
+<div class="callout">
+  <span class="label">The question</span>
+  <p><strong>What does it cost if this runs twice?</strong></p>
+</div>
+
+<p>There are only two answers, and they lead to different tools.</p>
+
+<table>
+  <thead>
+    <tr><th></th><th>Efficiency</th><th>Correctness</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>A double-run costs</td><td>money, CPU, duplicated work</td><td>wrong data</td></tr>
+    <tr><td>Is a sloppy lock OK?</td><td>yes</td><td><strong>no</strong></td></tr>
+    <tr><td>Is a lock even enough?</td><td>yes</td><td><strong>never, on its own</strong></td></tr>
+  </tbody>
+</table>
+
+<p>That second row is the useful one. If you are in the efficiency column, the
+cheapest thing that mostly works is the <em>right</em> answer — reach for it,
+write a comment saying the lock is approximate, and move on.</p>
+
+<p>The third row is the one that surprises people. Martin Kleppmann's argument,
+which the Redis documentation now repeats in its own voice, is that a lock with
+a timeout cannot deliver correctness by itself:</p>
+
+<blockquote>
+  You should implement fencing tokens… This applies to any distributed locking system.
+  <cite>— <a href="https://redis.io/docs/latest/develop/use/patterns/distributed-locks/">redis.io, Distributed locks</a></cite>
+</blockquote>
+
+<p>Why: every distributed lock needs a time limit, because if the holder dies
+nothing else can release it. And the moment it has a time limit, <strong>it can
+expire while you are still working</strong> — a garbage-collection pause is
+enough. Two processes then hold it, and neither knows.</p>
+
+<p>So in the correctness column, mutual exclusion is not the answer. Something
+must reject the stale writer — the database checking a version, or the storage
+service refusing a write without the current lease. We cover that in <a href="0005-every-lease-expires.html">lesson 5</a>.</p>
+
+<div class="callout">
+  <span class="label">Watch it happen</span>
+  <p>Our demo <code>07-expiry.cs</code> runs a lock exactly by the book —
+  <code>SET NX PX</code>, unique token, compare-and-delete unlock — and still
+  loses half its updates, silently.</p>
+  <pre><code>cd 01-locking/demos &amp;&amp; aspire run
+dotnet run 07-expiry.cs
+
+expected counter: 8
+actual counter:   4
+lost updates:     4</code></pre>
+</div>
+
+<h2>The practice</h2>
+
+<p>Sort each of these. They are all real shapes from systems like ours. The
+reasoning matters more than the score — read the feedback even when you are
+right.</p>
+
+<div id="q"></div>
+
+<h2>What to take away</h2>
+
+<p>The sort is not academic. It tells you when to stop.</p>
+
+<ul>
+  <li><strong>Efficiency</strong> → a Redis lease is fine. Accept the occasional
+  double-run and say so in a comment.</li>
+  <li><strong>Correctness</strong> → do not go looking for a better lock. Go
+  looking for a way to make the second run harmless, or to make the resource
+  refuse it.</li>
+</ul>
+
+<p>The most common expensive mistake on a team is spending a week hardening a
+lock for a problem in the right-hand column, where no amount of hardening helps.</p>
+
+<div class="source">
+  <span class="label">Read this next</span>
+  <p><a href="https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html">Martin
+  Kleppmann — <em>How to do distributed locking</em></a>. Fifteen minutes, and the
+  diagram of a client pausing through its own lease is the thing you will remember.
+  Then, if you have appetite, <a href="http://antirez.com/news/101">antirez's reply</a>
+  — they agree on more than the internet suggests.</p>
+</div>
+
+<div class="ask">
+  <strong>Stuck, or think one of the answers is wrong?</strong> Ask your agent —
+  it has the full framework and the primary sources behind every claim here, and
+  arguing with the material is how this one sticks.
+</div>
+
+<nav class="lesson-nav">
+  <a href="../index.html">All lessons</a>
+  <a href="../GLOSSARY.md">Glossary</a>
+  <a href="0002-the-lock-that-was-never-there.html">Lesson 2 →</a>
+</nav>
+
+<script src="../assets/quiz.js"></script>
+<script>
+Quiz.sort({
+  mount: '#q',
+  buckets: ['Efficiency', 'Correctness'],
+  items: [
+    { text: 'A nightly job rebuilds the search index from the database. Two pods both start it.',
+      answer: 'Efficiency',
+      why: 'Both produce an identical index. You pay twice in CPU and load on the source database, and nothing is wrong afterwards. Cheapest lock that mostly works.' },
+
+    { text: 'A customer clicks Pay, the browser times out, and the request is retried against a different pod.',
+      answer: 'Correctness',
+      why: 'The card gets charged twice. And note that no lock fixes this — the lock and the charge cannot commit together, so you need an idempotency key the provider deduplicates on.' },
+
+    { text: 'Two workers pick up the same job and both send the "your order shipped" email.',
+      answer: 'Correctness',
+      why: 'Tempting to call this cosmetic, but it is customer-visible wrong behaviour, and an email cannot be un-sent. Anything that leaves your system and cannot be retracted belongs here.' },
+
+    { text: 'Two instances both warm the same cache entry on startup.',
+      answer: 'Efficiency',
+      why: 'They compute the same value and write the same value. You wasted one computation. This is the textbook case for not bothering with a lock at all.' },
+
+    { text: 'Two requests both read a balance of 100, and each subtracts 30.',
+      answer: 'Correctness',
+      why: 'The classic lost update — the balance ends at 70 instead of 40. The fix is not a bigger lock but a version check on the write, so the second one fails and retries.' },
+
+    { text: 'A scheduled report is generated twice and written to the same blob.',
+      answer: 'Efficiency',
+      why: 'A deterministic overwrite — the second write produces the same bytes. But if the job DELETED and rebuilt in place, someone could read it half-written, and it moves to the other column.' }
+  ]
+});
+</script>
+</body>
+</html>

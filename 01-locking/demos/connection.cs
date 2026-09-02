@@ -17,11 +17,6 @@ public static class Conn
         (Environment.GetEnvironmentVariable("PG_DIRECT") ?? PgBase)
         + ";Pooling=true;Minimum Pool Size=1;Maximum Pool Size=1";
 
-    public static string PgBouncer =>
-        Environment.GetEnvironmentVariable("PG_BOUNCER")
-        ?? "Host=localhost;Port=56432;Username=postgres;Password=postgres;Database=lockdb;"
-         + "Pooling=false";   // we want raw connections; PgBouncer is the pool
-
     public static string Redis =>
         Environment.GetEnvironmentVariable("REDIS")
         ?? "localhost:56379";
